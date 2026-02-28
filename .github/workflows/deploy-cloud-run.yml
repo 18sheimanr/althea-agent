@@ -11,7 +11,28 @@ permissions:
   id-token: write
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: |
+          pytest -q
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     env:
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
@@ -20,8 +41,18 @@ jobs:
       FIRESTORE_COLLECTION: ${{ vars.FIRESTORE_COLLECTION }}
       ARTIFACT_REPO: ${{ vars.ARTIFACT_REPO }}
       IMAGE_NAME: ${{ vars.IMAGE_NAME }}
+      CONVERSATIONS_COLLECTION: ${{ vars.CONVERSATIONS_COLLECTION }}
+      EVENTS_COLLECTION: ${{ vars.EVENTS_COLLECTION }}
+      TWILIO_ALLOWED_FROM: ${{ vars.TWILIO_ALLOWED_FROM }}
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+      INTERNAL_HOOK_AUDIENCE: ${{ vars.INTERNAL_HOOK_AUDIENCE }}
+      TASKS_CALLER_SERVICE_ACCOUNT: ${{ vars.TASKS_CALLER_SERVICE_ACCOUNT }}
       TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
       TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      EVENT_HOOK_TOKEN: ${{ secrets.EVENT_HOOK_TOKEN }}
+      GOOGLE_SEARCH_API_KEY: ${{ secrets.GOOGLE_SEARCH_API_KEY }}
+      GOOGLE_SEARCH_CX: ${{ secrets.GOOGLE_SEARCH_CX }}
 
     steps:
       - name: Checkout
@@ -44,8 +75,14 @@ jobs:
           test -n "${FIRESTORE_COLLECTION}" || (echo "Missing repo variable: FIRESTORE_COLLECTION" && exit 1)
           test -n "${ARTIFACT_REPO}" || (echo "Missing repo variable: ARTIFACT_REPO" && exit 1)
           test -n "${IMAGE_NAME}" || (echo "Missing repo variable: IMAGE_NAME" && exit 1)
+          test -n "${CONVERSATIONS_COLLECTION}" || (echo "Missing repo variable: CONVERSATIONS_COLLECTION" && exit 1)
+          test -n "${EVENTS_COLLECTION}" || (echo "Missing repo variable: EVENTS_COLLECTION" && exit 1)
+          test -n "${TWILIO_ALLOWED_FROM}" || (echo "Missing repo variable: TWILIO_ALLOWED_FROM" && exit 1)
+          test -n "${INTERNAL_HOOK_AUDIENCE}" || (echo "Missing repo variable: INTERNAL_HOOK_AUDIENCE" && exit 1)
+          test -n "${TASKS_CALLER_SERVICE_ACCOUNT}" || (echo "Missing repo variable: TASKS_CALLER_SERVICE_ACCOUNT" && exit 1)
           test -n "${TWILIO_AUTH_TOKEN}" || (echo "Missing repo secret: TWILIO_AUTH_TOKEN" && exit 1)
           test -n "${TWILIO_ACCOUNT_SID}" || (echo "Missing repo secret: TWILIO_ACCOUNT_SID" && exit 1)
+          test -n "${GOOGLE_API_KEY}" || (echo "Missing repo secret: GOOGLE_API_KEY" && exit 1)
 
       - name: Configure Docker auth for Artifact Registry
         run: |
@@ -70,4 +107,4 @@ jobs:
             --min-instances 0 \
             --max-instances 1 \
             --service-account "${{ secrets.RUNTIME_SERVICE_ACCOUNT }}" \
-            --set-env-vars "GCP_PROJECT_ID=${GCP_PROJECT_ID},FIRESTORE_COLLECTION=${FIRESTORE_COLLECTION},TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN},TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}"
+            --set-env-vars "GCP_PROJECT_ID=${GCP_PROJECT_ID},FIRESTORE_COLLECTION=${FIRESTORE_COLLECTION},CONVERSATIONS_COLLECTION=${CONVERSATIONS_COLLECTION},EVENTS_COLLECTION=${EVENTS_COLLECTION},TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN},TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID},TWILIO_ALLOWED_FROM=${TWILIO_ALLOWED_FROM},GOOGLE_API_KEY=${GOOGLE_API_KEY},GEMINI_MODEL=${GEMINI_MODEL},EVENT_HOOK_TOKEN=${EVENT_HOOK_TOKEN},GOOGLE_SEARCH_API_KEY=${GOOGLE_SEARCH_API_KEY},GOOGLE_SEARCH_CX=${GOOGLE_SEARCH_CX},INTERNAL_HOOK_AUDIENCE=${INTERNAL_HOOK_AUDIENCE},TASKS_CALLER_SERVICE_ACCOUNT=${TASKS_CALLER_SERVICE_ACCOUNT}"

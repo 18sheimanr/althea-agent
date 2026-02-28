@@ -3,8 +3,13 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 from flask import Flask, Response, abort, jsonify, render_template, request
+from google.auth.transport import requests as google_auth_requests
 from google.cloud import firestore
+from google.oauth2 import id_token
 from twilio.request_validator import RequestValidator
+
+from agent_runtime import AthenaAgentRuntime
+from conversation_store import ConversationStore, conversation_id_for_phone
 
 
 app = Flask(__name__)
@@ -12,9 +17,32 @@ app = Flask(__name__)
 PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 COLLECTION_NAME = os.getenv("FIRESTORE_COLLECTION", "poc_requests")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_ALLOWED_FROM = os.getenv("TWILIO_ALLOWED_FROM", "+15555550100")
+CONVERSATIONS_COLLECTION = os.getenv("CONVERSATIONS_COLLECTION", "agent_conversations")
+EVENTS_COLLECTION = os.getenv("EVENTS_COLLECTION", "agent_events")
+EVENT_HOOK_TOKEN = os.getenv("EVENT_HOOK_TOKEN", "")
+INTERNAL_HOOK_AUDIENCE = os.getenv("INTERNAL_HOOK_AUDIENCE", "")
+TASKS_CALLER_SERVICE_ACCOUNT = os.getenv("TASKS_CALLER_SERVICE_ACCOUNT", "")
 
-# The Firestore client uses Application Default Credentials in Cloud Run.
-db = firestore.Client(project=PROJECT_ID) if PROJECT_ID else firestore.Client()
+def _create_firestore_client() -> Any:
+    # Local tests may run without ADC configured, so defer hard failures.
+    try:
+        return firestore.Client(project=PROJECT_ID) if PROJECT_ID else firestore.Client()
+    except Exception:
+        return None
+
+
+db = _create_firestore_client()
+store = (
+    ConversationStore(
+        db=db,
+        conversations_collection=CONVERSATIONS_COLLECTION,
+        events_collection=EVENTS_COLLECTION,
+    )
+    if db is not None
+    else None
+)
+agent_runtime = AthenaAgentRuntime(store=store) if store is not None else None
 
 
 def _request_metadata() -> Dict[str, Any]:
@@ -26,6 +54,80 @@ def _request_metadata() -> Dict[str, Any]:
         "host": request.host,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _twiml_message(text: str) -> str:
+    escaped = (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>{escaped}</Message>
+</Response>"""
+
+
+def _serialize_datetimes(payload: Dict[str, Any]) -> Dict[str, Any]:
+    output: Dict[str, Any] = {}
+    for key, value in payload.items():
+        if isinstance(value, datetime):
+            output[key] = value.astimezone(timezone.utc).isoformat()
+        else:
+            output[key] = value
+    return output
+
+
+def _assert_allowed_sender(phone_number: str) -> None:
+    if phone_number != TWILIO_ALLOWED_FROM:
+        abort(403, description="Sender is not allowed")
+
+
+def _verify_internal_hook_identity() -> None:
+    if not TASKS_CALLER_SERVICE_ACCOUNT:
+        abort(500, description="TASKS_CALLER_SERVICE_ACCOUNT is not configured")
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        abort(403, description="Missing bearer token")
+
+    token = auth_header.split(" ", 1)[1].strip()
+    audience = INTERNAL_HOOK_AUDIENCE or request.base_url
+
+    try:
+        claims = id_token.verify_oauth2_token(token, google_auth_requests.Request(), audience)
+    except Exception:
+        abort(403, description="Invalid identity token")
+
+    issuer = claims.get("iss", "")
+    if issuer not in {"accounts.google.com", "https://accounts.google.com"}:
+        abort(403, description="Invalid token issuer")
+
+    if claims.get("email_verified") is not True:
+        abort(403, description="Service account email is not verified")
+
+    caller_email = claims.get("email", "")
+    if caller_email != TASKS_CALLER_SERVICE_ACCOUNT:
+        abort(403, description="Caller service account is not allowed")
+
+    if EVENT_HOOK_TOKEN:
+        header_token = request.headers.get("X-Event-Hook-Token", "")
+        if header_token != EVENT_HOOK_TOKEN:
+            abort(403, description="Invalid event hook token")
+
+
+def _require_store() -> ConversationStore:
+    if store is None:
+        abort(500, description="Firestore client is not configured")
+    return store
+
+
+def _require_agent_runtime() -> AthenaAgentRuntime:
+    if agent_runtime is None:
+        abort(500, description="Agent runtime is not configured")
+    return agent_runtime
 
 
 @app.get("/health")
@@ -51,9 +153,59 @@ def terms_and_conditions() -> Any:
 @app.post("/track")
 def track() -> Any:
     metadata = _request_metadata()
+    if db is None:
+        abort(500, description="Firestore client is not configured")
     doc_ref = db.collection(COLLECTION_NAME).document()
     doc_ref.set(metadata)
     return jsonify({"saved": True, "doc_id": doc_ref.id, "collection": COLLECTION_NAME})
+
+
+@app.get("/events/reminders")
+def list_reminders() -> Any:
+    reminders = _require_store().list_reminders(limit=25)
+    return jsonify({"items": [_serialize_datetimes(item) for item in reminders]})
+
+
+@app.post("/internal/events/agent-hook")
+def event_hook() -> Any:
+    _verify_internal_hook_identity()
+
+    payload = request.get_json(silent=True) or {}
+    phone_number = payload.get("phone_number", TWILIO_ALLOWED_FROM)
+    _assert_allowed_sender(phone_number)
+
+    event_type = payload.get("type", "reminder")
+    title = payload.get("title", "Scheduled reminder")
+    details = payload.get("details", "")
+    due_at = payload.get("due_at", "")
+
+    conversation_id = conversation_id_for_phone(phone_number)
+    trigger_message = (
+        f"Event trigger received. type={event_type}, title={title}, due_at={due_at}, details={details}"
+    )
+    _require_store().append_message_event(
+        conversation_id=conversation_id,
+        role="system",
+        content=trigger_message,
+        phone_number=phone_number,
+        source="trigger",
+    )
+    context = _require_store().load_conversation_context(conversation_id)
+    result = _require_agent_runtime().run_agent_turn(
+        conversation_id=conversation_id,
+        phone_number=phone_number,
+        user_text=trigger_message,
+        context=context,
+    )
+    assistant_text = result["reply_text"]
+    _require_store().save_agent_response(
+        conversation_id=conversation_id,
+        phone_number=phone_number,
+        content=assistant_text,
+        source="agent",
+    )
+
+    return jsonify({"ok": True, "reply_text": assistant_text})
 
 
 @app.post("/receive-sms")
@@ -67,11 +219,45 @@ def receive_sms() -> Response:
     if not is_valid:
         abort(403, description="Invalid Twilio signature")
 
+    phone_number = request.form.get("From", "")
+    _assert_allowed_sender(phone_number)
+    incoming_text = request.form.get("Body", "").strip() or "(empty message)"
+
+    conversation_id = conversation_id_for_phone(phone_number)
+    _require_store().append_message_event(
+        conversation_id=conversation_id,
+        role="user",
+        content=incoming_text,
+        phone_number=phone_number,
+        source="sms",
+    )
+    context = _require_store().load_conversation_context(conversation_id)
+
+    result = _require_agent_runtime().run_agent_turn(
+        conversation_id=conversation_id,
+        phone_number=phone_number,
+        user_text=incoming_text,
+        context=context,
+    )
+    assistant_text = result["reply_text"]
+    _require_store().save_agent_response(
+        conversation_id=conversation_id,
+        phone_number=phone_number,
+        content=assistant_text,
+        source="agent",
+    )
+
+    rolling_summary = (
+        f"{context.get('rolling_summary', '')}\n"
+        f"User: {incoming_text}\n"
+        f"Assistant: {assistant_text}"
+    ).strip()[-2000:]
+    _require_store().update_conversation_state(
+        conversation_id=conversation_id, rolling_summary=rolling_summary
+    )
+
     # Twilio reads TwiML from the webhook response and sends it back to the sender.
-    twiml = """<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Message>Thanks for your message. This is an automated reply from althea-agent.</Message>
-</Response>"""
+    twiml = _twiml_message(assistant_text)
     return Response(twiml, status=200, mimetype="application/xml")
 
 
