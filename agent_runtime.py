@@ -3,8 +3,6 @@ import os
 import time
 from contextvars import ContextVar
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote_plus
-from urllib.request import urlopen
 
 from conversation_store import ConversationStore
 
@@ -20,26 +18,6 @@ class AthenaAgentRuntime:
         self._root_agent = None
         self._runner = None
         self._session_service = None
-
-    def _google_search_tool(self, query: str) -> Dict[str, Any]:
-        """Searches Google and returns top results as snippets."""
-        api_key = os.getenv("GOOGLE_SEARCH_API_KEY", "")
-        cx = os.getenv("GOOGLE_SEARCH_CX", "")
-        if not api_key or not cx:
-            return {
-                "status": "error",
-                "message": "Google search is not configured. Set GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_CX.",
-            }
-
-        encoded_query = quote_plus(query)
-        url = (
-            "https://www.googleapis.com/customsearch/v1"
-            f"?key={api_key}&cx={cx}&q={encoded_query}&num=3"
-        )
-        with urlopen(url, timeout=8) as response:
-            payload = response.read().decode("utf-8")
-
-        return {"status": "ok", "query": query, "raw": payload}
 
     def _create_event_tool(
         self,
@@ -72,7 +50,6 @@ class AthenaAgentRuntime:
             "You help the user with scheduling and reminders. "
             "When asked to save a task/event, call create_event_tool. "
             "Event types allowed: full day, partial day, reminder. "
-            "When useful, call google_search_tool for factual lookups. "
             "Keep SMS responses concise and practical."
         )
         return Agent(
@@ -80,7 +57,7 @@ class AthenaAgentRuntime:
             name="athena_sms_agent",
             description="SMS scheduler assistant for one user.",
             instruction=instruction,
-            tools=[self._google_search_tool, self._create_event_tool],
+            tools=[self._create_event_tool],
         )
 
     def _ensure_runner(self) -> None:

@@ -6,6 +6,7 @@ from flask import Flask, Response, abort, jsonify, render_template, request
 from google.auth.transport import requests as google_auth_requests
 from google.cloud import firestore
 from google.oauth2 import id_token
+from twilio.rest import Client
 from twilio.request_validator import RequestValidator
 
 from agent_runtime import AthenaAgentRuntime
@@ -18,11 +19,13 @@ PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 COLLECTION_NAME = os.getenv("FIRESTORE_COLLECTION", "poc_requests")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_ALLOWED_FROM = os.getenv("TWILIO_ALLOWED_FROM", "+15555550100")
+TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")
+TWILIO_MESSAGING_SERVICE_SID = os.getenv("TWILIO_MESSAGING_SERVICE_SID", "")
 CONVERSATIONS_COLLECTION = os.getenv("CONVERSATIONS_COLLECTION", "agent_conversations")
 EVENTS_COLLECTION = os.getenv("EVENTS_COLLECTION", "agent_events")
-EVENT_HOOK_TOKEN = os.getenv("EVENT_HOOK_TOKEN", "")
 INTERNAL_HOOK_AUDIENCE = os.getenv("INTERNAL_HOOK_AUDIENCE", "")
 TASKS_CALLER_SERVICE_ACCOUNT = os.getenv("TASKS_CALLER_SERVICE_ACCOUNT", "")
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 
 def _create_firestore_client() -> Any:
     # Local tests may run without ADC configured, so defer hard failures.
@@ -85,6 +88,31 @@ def _assert_allowed_sender(phone_number: str) -> None:
         abort(403, description="Sender is not allowed")
 
 
+def _send_sms_via_twilio(to_number: str, body: str) -> Dict[str, Any]:
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+        abort(500, description="Twilio credentials are not configured")
+
+    if not TWILIO_FROM_NUMBER and not TWILIO_MESSAGING_SERVICE_SID:
+        abort(
+            500,
+            description="Set TWILIO_FROM_NUMBER or TWILIO_MESSAGING_SERVICE_SID for outbound SMS",
+        )
+
+    client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    create_kwargs: Dict[str, Any] = {"to": to_number, "body": body}
+    if TWILIO_MESSAGING_SERVICE_SID:
+        create_kwargs["messaging_service_sid"] = TWILIO_MESSAGING_SERVICE_SID
+    else:
+        create_kwargs["from_"] = TWILIO_FROM_NUMBER
+
+    message = client.messages.create(**create_kwargs)
+    return {
+        "sid": message.sid,
+        "status": message.status,
+        "to": message.to,
+    }
+
+
 def _verify_internal_hook_identity() -> None:
     if not TASKS_CALLER_SERVICE_ACCOUNT:
         abort(500, description="TASKS_CALLER_SERVICE_ACCOUNT is not configured")
@@ -111,12 +139,6 @@ def _verify_internal_hook_identity() -> None:
     caller_email = claims.get("email", "")
     if caller_email != TASKS_CALLER_SERVICE_ACCOUNT:
         abort(403, description="Caller service account is not allowed")
-
-    if EVENT_HOOK_TOKEN:
-        header_token = request.headers.get("X-Event-Hook-Token", "")
-        if header_token != EVENT_HOOK_TOKEN:
-            abort(403, description="Invalid event hook token")
-
 
 def _require_store() -> ConversationStore:
     if store is None:
@@ -205,7 +227,22 @@ def event_hook() -> Any:
         source="agent",
     )
 
-    return jsonify({"ok": True, "reply_text": assistant_text})
+    send_result = _send_sms_via_twilio(to_number=phone_number, body=assistant_text)
+    return jsonify({"ok": True, "reply_text": assistant_text, "sms": send_result})
+
+
+@app.post("/send-sms")
+def send_sms() -> Any:
+    _verify_internal_hook_identity()
+    payload = request.get_json(silent=True) or {}
+    body = (payload.get("body") or "").strip()
+    if not body:
+        abort(400, description="body is required")
+
+    to_number = payload.get("to", TWILIO_ALLOWED_FROM)
+    _assert_allowed_sender(to_number)
+    send_result = _send_sms_via_twilio(to_number=to_number, body=body)
+    return jsonify({"ok": True, "sms": send_result})
 
 
 @app.post("/receive-sms")

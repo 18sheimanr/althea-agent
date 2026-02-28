@@ -17,11 +17,19 @@ class FakeRuntime:
         return {"reply_text": "Triggered response"}
 
 
+def _patch_sms_send(monkeypatch):
+    monkeypatch.setattr(
+        app_module,
+        "_send_sms_via_twilio",
+        lambda to_number, body: {"sid": "SM123", "status": "queued", "to": to_number},
+    )
+
+
 def test_event_hook_requires_bearer_token(monkeypatch):
     monkeypatch.setattr(app_module, "store", FakeStore())
     monkeypatch.setattr(app_module, "agent_runtime", FakeRuntime())
-    monkeypatch.setattr(app_module, "EVENT_HOOK_TOKEN", "")
     monkeypatch.setattr(app_module, "TASKS_CALLER_SERVICE_ACCOUNT", "tasks-caller@example.iam.gserviceaccount.com")
+    _patch_sms_send(monkeypatch)
 
     client = app_module.app.test_client()
     response = client.post("/internal/events/agent-hook", json={"type": "reminder"})
@@ -31,8 +39,8 @@ def test_event_hook_requires_bearer_token(monkeypatch):
 def test_event_hook_requires_tasks_service_account_config(monkeypatch):
     monkeypatch.setattr(app_module, "store", FakeStore())
     monkeypatch.setattr(app_module, "agent_runtime", FakeRuntime())
-    monkeypatch.setattr(app_module, "EVENT_HOOK_TOKEN", "")
     monkeypatch.setattr(app_module, "TASKS_CALLER_SERVICE_ACCOUNT", "")
+    _patch_sms_send(monkeypatch)
 
     client = app_module.app.test_client()
     response = client.post(
@@ -46,8 +54,8 @@ def test_event_hook_requires_tasks_service_account_config(monkeypatch):
 def test_event_hook_accepts_valid_oidc_and_service_account(monkeypatch):
     monkeypatch.setattr(app_module, "store", FakeStore())
     monkeypatch.setattr(app_module, "agent_runtime", FakeRuntime())
-    monkeypatch.setattr(app_module, "EVENT_HOOK_TOKEN", "")
     monkeypatch.setattr(app_module, "TASKS_CALLER_SERVICE_ACCOUNT", "tasks-caller@example.iam.gserviceaccount.com")
+    _patch_sms_send(monkeypatch)
 
     def _fake_verify(token, req, audience):
         return {
@@ -66,3 +74,4 @@ def test_event_hook_accepts_valid_oidc_and_service_account(monkeypatch):
     )
     assert response.status_code == 200
     assert response.get_json()["ok"] is True
+    assert response.get_json()["sms"]["sid"] == "SM123"
