@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from google.cloud import firestore
+from reminder_scheduler import ReminderTaskScheduler
 
 ALLOWED_EVENT_TYPES = {"full day", "partial day", "reminder"}
 
@@ -22,10 +23,12 @@ class ConversationStore:
         db: firestore.Client,
         conversations_collection: str = "agent_conversations",
         events_collection: str = "agent_events",
+        reminder_scheduler: Optional[ReminderTaskScheduler] = None,
     ) -> None:
         self.db = db
         self.conversations_collection = conversations_collection
         self.events_collection = events_collection
+        self.reminder_scheduler = reminder_scheduler
 
     def _conversation_ref(self, conversation_id: str) -> firestore.DocumentReference:
         return self.db.collection(self.conversations_collection).document(conversation_id)
@@ -153,6 +156,31 @@ class ConversationStore:
         doc_ref = self.db.collection(self.events_collection).document()
         doc_ref.set(payload)
         payload["id"] = doc_ref.id
+
+        if event_type == "reminder":
+            if not due_at:
+                raise ValueError("reminder events require due_at in ISO-8601 UTC format")
+            if self.reminder_scheduler is None:
+                raise RuntimeError("Reminder scheduler is not configured")
+
+            try:
+                task_name = self.reminder_scheduler.schedule_reminder(payload)
+                schedule_updates = {
+                    "task_name": task_name,
+                    "schedule_status": "scheduled",
+                    "scheduled_at": utc_now(),
+                }
+                doc_ref.set(schedule_updates, merge=True)
+                payload.update(schedule_updates)
+            except Exception as exc:
+                doc_ref.set(
+                    {
+                        "schedule_status": "failed",
+                        "schedule_error": str(exc),
+                    },
+                    merge=True,
+                )
+                raise
         return payload
 
     def list_reminders(self, limit: int = 25) -> List[Dict[str, Any]]:

@@ -3,6 +3,7 @@
 Production Flask service for an SMS-first assistant:
 - Hosted on Cloud Run (`athena-api`)
 - Uses Firestore for conversation/event persistence
+- Schedules reminder delivery with Cloud Tasks
 - Handles inbound SMS from Twilio at `/receive-sms`
 - Runs Google ADK agent with Gemini (`google-adk==1.26.0`)
 - Exposes a reminders viewer at `/events/reminders`
@@ -53,6 +54,7 @@ flowchart TD
 - `POST /receive-sms` (Twilio inbound)
 - `GET /events/reminders`
 - `POST /internal/events/agent-hook` (OIDC-protected trigger for reminders)
+- `POST /send-sms` (OIDC-protected internal outbound sender)
 
 ## Local Development (Python 3.11 required)
 
@@ -129,6 +131,8 @@ gh workflow run "Deploy to Cloud Run"
 - `GEMINI_MODEL` (default `gemini-2.5-flash`)
 - `INTERNAL_HOOK_AUDIENCE` (default current prod hook URL)
 - `TASKS_CALLER_SERVICE_ACCOUNT` (default runtime SA)
+- `TASKS_QUEUE_ID` (default `athena-reminders`)
+- `TASKS_LOCATION` (default `GCP_REGION`)
 - `TWILIO_FROM_NUMBER` (optional, used for outbound SMS)
 - `TWILIO_MESSAGING_SERVICE_SID` (optional alternative for outbound SMS)
 
@@ -167,6 +171,24 @@ gcloud firestore indexes composite create \
   --query-scope=COLLECTION \
   --field-config field-path=type,order=ascending \
   --field-config field-path=created_at,order=descending
+```
+
+## Cloud Tasks Queue
+
+Reminder creation expects a queue to exist.
+
+Create queue (one-time):
+```bash
+gcloud tasks queues create athena-reminders \
+  --location us-central1 \
+  --project your-gcp-project-id
+```
+
+Check queue:
+```bash
+gcloud tasks queues describe athena-reminders \
+  --location us-central1 \
+  --project your-gcp-project-id
 ```
 
 ## Ops Debug Runbook

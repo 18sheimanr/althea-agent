@@ -32,15 +32,18 @@ class AthenaAgentRuntime:
         if not conversation_id or not phone_number:
             return {"status": "error", "message": "Conversation context not available for event creation."}
 
-        event = self.store.create_event(
-            event_type=event_type,
-            title=title,
-            due_at=due_at or None,
-            details=details,
-            conversation_id=conversation_id,
-            phone_number=phone_number,
-        )
-        return {"status": "ok", "event": event}
+        try:
+            event = self.store.create_event(
+                event_type=event_type,
+                title=title,
+                due_at=due_at or None,
+                details=details,
+                conversation_id=conversation_id,
+                phone_number=phone_number,
+            )
+            return {"status": "ok", "event": event}
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
 
     def _build_root_agent(self) -> Any:
         from google.adk.agents.llm_agent import Agent
@@ -50,6 +53,8 @@ class AthenaAgentRuntime:
             "You help the user with scheduling and reminders. "
             "When asked to save a task/event, call create_event_tool. "
             "Event types allowed: full day, partial day, reminder. "
+            "For reminders, always include due_at in ISO-8601 UTC format "
+            "(example: 2026-03-01T15:30:00Z). "
             "Keep SMS responses concise and practical."
         )
         return Agent(

@@ -11,6 +11,7 @@ from twilio.request_validator import RequestValidator
 
 from agent_runtime import AthenaAgentRuntime
 from conversation_store import ConversationStore, conversation_id_for_phone
+from reminder_scheduler import ReminderTaskScheduler
 
 
 app = Flask(__name__)
@@ -26,6 +27,8 @@ EVENTS_COLLECTION = os.getenv("EVENTS_COLLECTION", "agent_events")
 INTERNAL_HOOK_AUDIENCE = os.getenv("INTERNAL_HOOK_AUDIENCE", "")
 TASKS_CALLER_SERVICE_ACCOUNT = os.getenv("TASKS_CALLER_SERVICE_ACCOUNT", "")
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
+TASKS_QUEUE_ID = os.getenv("TASKS_QUEUE_ID", "athena-reminders")
+TASKS_LOCATION = os.getenv("TASKS_LOCATION", os.getenv("GCP_REGION", "us-central1"))
 
 def _create_firestore_client() -> Any:
     # Local tests may run without ADC configured, so defer hard failures.
@@ -36,11 +39,28 @@ def _create_firestore_client() -> Any:
 
 
 db = _create_firestore_client()
+reminder_scheduler = None
+if (
+    PROJECT_ID
+    and INTERNAL_HOOK_AUDIENCE
+    and TASKS_CALLER_SERVICE_ACCOUNT
+    and TASKS_QUEUE_ID
+    and TASKS_LOCATION
+):
+    reminder_scheduler = ReminderTaskScheduler(
+        project_id=PROJECT_ID,
+        location=TASKS_LOCATION,
+        queue_id=TASKS_QUEUE_ID,
+        target_url=INTERNAL_HOOK_AUDIENCE,
+        service_account_email=TASKS_CALLER_SERVICE_ACCOUNT,
+    )
+
 store = (
     ConversationStore(
         db=db,
         conversations_collection=CONVERSATIONS_COLLECTION,
         events_collection=EVENTS_COLLECTION,
+        reminder_scheduler=reminder_scheduler,
     )
     if db is not None
     else None

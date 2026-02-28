@@ -110,19 +110,43 @@ def test_conversation_id_for_phone():
 
 
 def test_create_event_validates_allowed_types():
-    store = ConversationStore(FakeDB())
+    class FakeScheduler:
+        def schedule_reminder(self, event_payload):
+            return "projects/p/locations/l/queues/q/tasks/t1"
+
+    store = ConversationStore(FakeDB(), reminder_scheduler=FakeScheduler())
     event = store.create_event(
         event_type="reminder",
         title="Pay rent",
         phone_number="+15555550100",
         conversation_id="phone_1555",
+        due_at="2026-03-01T15:30:00Z",
     )
     assert event["type"] == "reminder"
+    assert event["schedule_status"] == "scheduled"
 
     try:
         store.create_event(
             event_type="invalid",
             title="Nope",
+            phone_number="+15555550100",
+            conversation_id="phone_1555",
+        )
+        assert False, "Expected ValueError"
+    except ValueError:
+        assert True
+
+
+def test_reminder_requires_due_at():
+    class FakeScheduler:
+        def schedule_reminder(self, event_payload):
+            return "task-1"
+
+    store = ConversationStore(FakeDB(), reminder_scheduler=FakeScheduler())
+    try:
+        store.create_event(
+            event_type="reminder",
+            title="No due date",
             phone_number="+15555550100",
             conversation_id="phone_1555",
         )
