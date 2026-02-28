@@ -1,0 +1,9 @@
+venv
+/Pipfile
+.DS_Store
+/backend/__pycache__
+/frontend/package-lock.json
+.env
+.venv
+__pycache__/
+.idea/

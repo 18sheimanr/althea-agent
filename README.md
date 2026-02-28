@@ -1,4 +1,4 @@
-# Athena Flask + Cloud Run + Firestore POC
+# althea Flask + Cloud Run + Firestore POC
 
 Minimal Flask API deployed to Cloud Run using only GitHub Actions (no Terraform).
 
@@ -30,7 +30,7 @@ GITHUB_REPO="your-repo-name"
 POOL_ID="github-pool"
 PROVIDER_ID="github-provider"
 CI_SA="github-cloudrun-deployer"
-RUNTIME_SA="athena-cloudrun-runtime"
+RUNTIME_SA="althea-cloudrun-runtime"
 
 gcloud config set project "$PROJECT_ID"
 
@@ -43,7 +43,7 @@ gcloud services enable \
 
 # Runtime service account (used by Cloud Run container)
 gcloud iam service-accounts create "$RUNTIME_SA" \
-  --display-name="Athena Cloud Run Runtime" || true
+  --display-name="althea Cloud Run Runtime" || true
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:${RUNTIME_SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
   --role="roles/datastore.user"
@@ -99,14 +99,14 @@ Set these **Repository Variables**:
 
 - `GCP_PROJECT_ID` = your project id
 - `GCP_REGION` = `us-central1` (or your region)
-- `CLOUD_RUN_SERVICE_NAME` = `athena-poc-api`
+- `CLOUD_RUN_SERVICE_NAME` = `althea-poc-api`
 - `FIRESTORE_COLLECTION` = `poc_requests`
 
 Set these **Repository Secrets**:
 
 - `WIF_PROVIDER` = `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID`
 - `WIF_SERVICE_ACCOUNT` = `github-cloudrun-deployer@PROJECT_ID.iam.gserviceaccount.com`
-- `RUNTIME_SERVICE_ACCOUNT` = `athena-cloudrun-runtime@PROJECT_ID.iam.gserviceaccount.com`
+- `RUNTIME_SERVICE_ACCOUNT` = `althea-cloudrun-runtime@PROJECT_ID.iam.gserviceaccount.com`
 
 ## Deploy
 

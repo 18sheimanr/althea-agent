@@ -1,0 +1,54 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      CLOUD_RUN_SERVICE_NAME: ${{ vars.CLOUD_RUN_SERVICE_NAME }}
+      FIRESTORE_COLLECTION: ${{ vars.FIRESTORE_COLLECTION }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Validate required workflow variables
+        run: |
+          test -n "${GCP_PROJECT_ID}" || (echo "Missing repo variable: GCP_PROJECT_ID" && exit 1)
+          test -n "${GCP_REGION}" || (echo "Missing repo variable: GCP_REGION" && exit 1)
+          test -n "${CLOUD_RUN_SERVICE_NAME}" || (echo "Missing repo variable: CLOUD_RUN_SERVICE_NAME" && exit 1)
+          test -n "${FIRESTORE_COLLECTION}" || (echo "Missing repo variable: FIRESTORE_COLLECTION" && exit 1)
+
+      - name: Deploy from source to Cloud Run
+        run: |
+          gcloud run deploy "${CLOUD_RUN_SERVICE_NAME}" \
+            --project "${GCP_PROJECT_ID}" \
+            --region "${GCP_REGION}" \
+            --source . \
+            --allow-unauthenticated \
+            --memory 256Mi \
+            --cpu 1 \
+            --min-instances 0 \
+            --max-instances 1 \
+            --service-account "${{ secrets.RUNTIME_SERVICE_ACCOUNT }}" \
+            --set-env-vars "GCP_PROJECT_ID=${GCP_PROJECT_ID},FIRESTORE_COLLECTION=${FIRESTORE_COLLECTION}"
