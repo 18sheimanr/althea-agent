@@ -1,7 +1,7 @@
 # Agent Notes
 
-- You are working on a personal AI assistant hosted on GCP that uses
-- ALWAYS START by looking in the ./docs/ folder. ONLY read docs if they are helpful for the task at hand. But ALWAYS check.
+- You are working on a personal AI assistant hosted on GCP that uses google-adk agentic framework
+- ALWAYS START by looking in the ./docs/ folder. ONLY read docs if they are helpful for the task at hand. But always check.
 - Infra is simple: Cloud Run + Firestore + GitHub Actions OIDC.
 - Basic deploy commands:
   - Push trigger deploy: `git push origin main`
