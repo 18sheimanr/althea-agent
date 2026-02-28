@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 from google.cloud import firestore
 
 
@@ -47,6 +47,16 @@ def track() -> Any:
     doc_ref = db.collection(COLLECTION_NAME).document()
     doc_ref.set(metadata)
     return jsonify({"saved": True, "doc_id": doc_ref.id, "collection": COLLECTION_NAME})
+
+
+@app.post("/receive-sms")
+def receive_sms() -> Response:
+    # Twilio reads TwiML from the webhook response and sends it back to the sender.
+    twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Thanks for your message. This is an automated reply from althea-agent.</Message>
+</Response>"""
+    return Response(twiml, status=200, mimetype="application/xml")
 
 
 if __name__ == "__main__":

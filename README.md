@@ -1,136 +1,15 @@
-# althea Flask + Cloud Run + Firestore POC
+# althea-agent
 
-Minimal Flask API deployed to Cloud Run using only GitHub Actions (no Terraform).
+Minimal Flask API deployed to Cloud Run with GitHub Actions.  
+The app writes simple request metadata to Firestore.
 
-## What this includes
+## Endpoints
 
-- Flask app with `/health`, `/`, and `/track` (writes to Firestore)
-- GitHub Actions workflow at `.github/workflows/deploy-cloud-run.yml`
-- Cloud Run deploy with low-cost defaults:
-  - `min-instances=0`
-  - `max-instances=1`
-  - `memory=256Mi`
+- `GET /health`
+- `GET /`
+- `POST /track`
 
-## Prerequisites
-
-1. A GitHub repository with this code pushed.
-2. A GCP project with billing enabled.
-3. `gcloud` installed locally for one-time setup.
-
-## One-time GCP setup for GitHub Actions (OIDC)
-
-Run this locally once (replace placeholder values first):
-
-```bash
-PROJECT_ID="your-gcp-project-id"
-PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
-REGION="us-central1"
-GITHUB_ORG="your-github-org-or-username"
-GITHUB_REPO="your-repo-name"
-POOL_ID="github-pool"
-PROVIDER_ID="github-provider"
-CI_SA="github-cloudrun-deployer"
-RUNTIME_SA="althea-cloudrun-runtime"
-
-gcloud config set project "$PROJECT_ID"
-
-# Required APIs
-gcloud services enable \
-  run.googleapis.com \
-  iamcredentials.googleapis.com \
-  artifactregistry.googleapis.com \
-  firestore.googleapis.com
-
-# Runtime service account (used by Cloud Run container)
-gcloud iam service-accounts create "$RUNTIME_SA" \
-  --display-name="althea Cloud Run Runtime" || true
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-  --member="serviceAccount:${RUNTIME_SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --role="roles/datastore.user"
-
-# CI deployer service account (impersonated by GitHub OIDC)
-gcloud iam service-accounts create "$CI_SA" \
-  --display-name="GitHub Cloud Run Deployer" || true
-
-# Least required deploy perms for CI SA
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-  --member="serviceAccount:${CI_SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --role="roles/run.admin"
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-  --member="serviceAccount:${CI_SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --role="roles/artifactregistry.writer"
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-  --member="serviceAccount:${CI_SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --role="roles/serviceusage.serviceUsageConsumer"
-gcloud iam service-accounts add-iam-policy-binding \
-  "${RUNTIME_SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --member="serviceAccount:${CI_SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --role="roles/iam.serviceAccountUser"
-
-# One-time Artifact Registry repository
-gcloud artifacts repositories create athena \
-  --repository-format=docker \
-  --location="$REGION" \
-  --description="Container images for althea-agent" || true
-
-# Workload Identity Federation pool + provider
-gcloud iam workload-identity-pools create "$POOL_ID" \
-  --project="$PROJECT_ID" \
-  --location="global" \
-  --display-name="GitHub Actions Pool" || true
-
-gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_ID" \
-  --project="$PROJECT_ID" \
-  --location="global" \
-  --workload-identity-pool="$POOL_ID" \
-  --display-name="GitHub Provider" \
-  --issuer-uri="https://token.actions.githubusercontent.com" \
-  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref" \
-  --attribute-condition="assertion.repository=='${GITHUB_ORG}/${GITHUB_REPO}'" || true
-
-gcloud iam service-accounts add-iam-policy-binding \
-  "${CI_SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --project="$PROJECT_ID" \
-  --role="roles/iam.workloadIdentityUser" \
-  --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}/attribute.repository/${GITHUB_ORG}/${GITHUB_REPO}"
-```
-
-## Initialize Firestore (one-time)
-
-If Firestore is not already initialized in this project, create it once in the Google Cloud Console (Firestore in Native mode), then continue.
-
-## Configure GitHub repository settings
-
-Set these **Repository Variables**:
-
-- `GCP_PROJECT_ID` = your project id
-- `GCP_REGION` = `us-central1` (or your region)
-- `CLOUD_RUN_SERVICE_NAME` = `athena-api`
-- `FIRESTORE_COLLECTION` = `athena-agent`
-- `ARTIFACT_REPO` = `athena`
-- `IMAGE_NAME` = `athena-poc`
-
-Set these **Repository Secrets**:
-
-- `WIF_PROVIDER` = `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID`
-- `WIF_SERVICE_ACCOUNT` = `github-cloudrun-deployer@PROJECT_ID.iam.gserviceaccount.com`
-- `RUNTIME_SERVICE_ACCOUNT` = `althea-cloudrun-runtime@PROJECT_ID.iam.gserviceaccount.com`
-
-## Deploy
-
-- Push to `main`, or run the workflow manually via GitHub Actions (`workflow_dispatch`).
-- Workflow builds a Docker image, pushes to Artifact Registry, and deploys that image to Cloud Run.
-
-## Test after deploy
-
-```bash
-SERVICE_URL="https://your-service-url"
-curl "${SERVICE_URL}/health"
-curl "${SERVICE_URL}/"
-curl -X POST "${SERVICE_URL}/track"
-```
-
-## Optional local run
+## Local Development
 
 ```bash
 cp example.env .env
@@ -141,6 +20,39 @@ set -a && source .env && set +a
 python app.py
 ```
 
-## Firestore free-tier note
+Test locally:
 
-This POC writes one small document for each `/track` call. Keep usage low to stay within free-tier quotas.
+```bash
+curl http://localhost:8080/health
+curl http://localhost:8080/
+curl -X POST http://localhost:8080/track
+```
+
+## Deploy
+
+Deployment is fully automated by `.github/workflows/deploy-cloud-run.yml`.
+
+1. Commit changes.
+2. Push to `main`.
+3. Wait for the `Deploy to Cloud Run` workflow to pass.
+
+The workflow builds a Docker image, pushes it to Artifact Registry, and deploys to Cloud Run.
+
+## Required GitHub Repo Configuration
+
+Repository variables:
+
+- `GCP_PROJECT_ID`
+- `GCP_REGION`
+- `CLOUD_RUN_SERVICE_NAME`
+- `FIRESTORE_COLLECTION`
+- `ARTIFACT_REPO`
+- `IMAGE_NAME`
+
+Repository secrets:
+
+- `WIF_PROVIDER`
+- `WIF_SERVICE_ACCOUNT`
+- `RUNTIME_SERVICE_ACCOUNT`
+
+If any of these are missing, ask a repo/GCP admin to set them.
