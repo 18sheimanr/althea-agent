@@ -37,8 +37,8 @@ gcloud config set project "$PROJECT_ID"
 # Required APIs
 gcloud services enable \
   run.googleapis.com \
-  cloudbuild.googleapis.com \
   iamcredentials.googleapis.com \
+  artifactregistry.googleapis.com \
   firestore.googleapis.com
 
 # Runtime service account (used by Cloud Run container)
@@ -58,14 +58,20 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --role="roles/run.admin"
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:${CI_SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --role="roles/cloudbuild.builds.editor"
+  --role="roles/artifactregistry.writer"
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:${CI_SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --role="roles/storage.admin"
+  --role="roles/serviceusage.serviceUsageConsumer"
 gcloud iam service-accounts add-iam-policy-binding \
   "${RUNTIME_SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
   --member="serviceAccount:${CI_SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
   --role="roles/iam.serviceAccountUser"
+
+# One-time Artifact Registry repository
+gcloud artifacts repositories create athena \
+  --repository-format=docker \
+  --location="$REGION" \
+  --description="Container images for althea-agent" || true
 
 # Workload Identity Federation pool + provider
 gcloud iam workload-identity-pools create "$POOL_ID" \
@@ -99,8 +105,10 @@ Set these **Repository Variables**:
 
 - `GCP_PROJECT_ID` = your project id
 - `GCP_REGION` = `us-central1` (or your region)
-- `CLOUD_RUN_SERVICE_NAME` = `althea-poc-api`
-- `FIRESTORE_COLLECTION` = `poc_requests`
+- `CLOUD_RUN_SERVICE_NAME` = `athena-api`
+- `FIRESTORE_COLLECTION` = `athena-agent`
+- `ARTIFACT_REPO` = `athena`
+- `IMAGE_NAME` = `athena-poc`
 
 Set these **Repository Secrets**:
 
@@ -111,7 +119,7 @@ Set these **Repository Secrets**:
 ## Deploy
 
 - Push to `main`, or run the workflow manually via GitHub Actions (`workflow_dispatch`).
-- Workflow will build from source and deploy to Cloud Run.
+- Workflow builds a Docker image, pushes to Artifact Registry, and deploys that image to Cloud Run.
 
 ## Test after deploy
 
@@ -136,4 +144,3 @@ python app.py
 ## Firestore free-tier note
 
 This POC writes one small document for each `/track` call. Keep usage low to stay within free-tier quotas.
-# althea-agent
