@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-from flask import Flask, Response, abort, jsonify, request
+from flask import Flask, Response, abort, jsonify, render_template, request
 from google.cloud import firestore
 from twilio.request_validator import RequestValidator
 
@@ -35,12 +35,17 @@ def health() -> Any:
 
 @app.get("/")
 def index() -> Any:
-    return jsonify(
-        {
-            "message": "Flask + Cloud Run + Firestore POC is running.",
-            "hint": "Call POST /track to write a tiny record to Firestore.",
-        }
-    )
+    return render_template("index.html")
+
+
+@app.get("/privacy-policy")
+def privacy_policy() -> Any:
+    return render_template("privacy_policy.html")
+
+
+@app.get("/terms-and-conditions")
+def terms_and_conditions() -> Any:
+    return render_template("terms_and_conditions.html")
 
 
 @app.post("/track")

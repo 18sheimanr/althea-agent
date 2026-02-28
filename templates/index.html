@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>althea-agent</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 2rem auto;
+        max-width: 720px;
+        padding: 0 1rem;
+        color: #111;
+      }
+      .card {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 1rem;
+        margin-top: 1rem;
+      }
+      button {
+        background: #111;
+        border: 0;
+        border-radius: 6px;
+        color: #fff;
+        cursor: pointer;
+        padding: 0.6rem 0.9rem;
+      }
+      pre {
+        background: #f5f5f5;
+        border-radius: 6px;
+        overflow-x: auto;
+        padding: 0.8rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>althea-agent</h1>
+    <p>Cloud Run is live. Use this page for quick API smoke checks and policy links.</p>
+
+    <div class="card">
+      <h2>Policy Pages</h2>
+      <p><a href="/privacy-policy">Privacy Policy</a></p>
+      <p><a href="/terms-and-conditions">Terms and Conditions</a></p>
+    </div>
+
+    <div class="card">
+      <h2>Quick tests</h2>
+      <button id="healthBtn" type="button">Check /health</button>
+      <button id="trackBtn" type="button">POST /track</button>
+      <pre id="output">Click a button to test the backend.</pre>
+    </div>
+
+    <script>
+      const output = document.getElementById("output");
+
+      async function callApi(path, method = "GET") {
+        output.textContent = "Loading...";
+        const res = await fetch(path, { method });
+        const text = await res.text();
+        output.textContent = text;
+      }
+
+      document.getElementById("healthBtn").addEventListener("click", () => callApi("/health"));
+      document.getElementById("trackBtn").addEventListener("click", () => callApi("/track", "POST"));
+    </script>
+  </body>
+</html>
