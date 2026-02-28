@@ -2,5 +2,5 @@ Flask==3.0.3
 gunicorn==23.0.0
 google-cloud-firestore==2.20.1
 twilio==9.5.2
-google-adk @ git+https://github.com/google/adk-python.git@v1.26.0
+google-adk==1.26.0
 pytest
