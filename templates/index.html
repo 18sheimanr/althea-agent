@@ -47,7 +47,6 @@
     <div class="card">
       <h2>Quick tests</h2>
       <button id="healthBtn" type="button">Check /health</button>
-      <button id="trackBtn" type="button">POST /track</button>
       <button id="remindersBtn" type="button">View reminders</button>
       <pre id="output">Click a button to test the backend.</pre>
     </div>
@@ -63,7 +62,6 @@
       }
 
       document.getElementById("healthBtn").addEventListener("click", () => callApi("/health"));
-      document.getElementById("trackBtn").addEventListener("click", () => callApi("/track", "POST"));
       document.getElementById("remindersBtn").addEventListener("click", () => callApi("/events/reminders"));
     </script>
   </body>

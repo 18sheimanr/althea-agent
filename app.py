@@ -1,4 +1,6 @@
 import os
+import threading
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -17,7 +19,6 @@ from reminder_scheduler import ReminderTaskScheduler
 app = Flask(__name__)
 
 PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-COLLECTION_NAME = os.getenv("FIRESTORE_COLLECTION", "poc_requests")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_ALLOWED_FROM = os.getenv("TWILIO_ALLOWED_FROM", "+15555550100")
 TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")
@@ -66,17 +67,6 @@ store = (
     else None
 )
 agent_runtime = AthenaAgentRuntime(store=store) if store is not None else None
-
-
-def _request_metadata() -> Dict[str, Any]:
-    return {
-        "method": request.method,
-        "path": request.path,
-        "remote_addr": request.remote_addr,
-        "user_agent": request.headers.get("User-Agent", ""),
-        "host": request.host,
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-    }
 
 
 def _twiml_message(text: str) -> str:
@@ -172,6 +162,33 @@ def _require_agent_runtime() -> AthenaAgentRuntime:
     return agent_runtime
 
 
+# Rate limit: 1 request per second per IP for /events/reminders
+_reminders_rate_limit: Dict[str, float] = defaultdict(float)
+_reminders_rate_limit_lock = threading.Lock()
+
+
+def _check_reminders_rate_limit() -> None:
+    client_ip = request.remote_addr or "unknown"
+    now = datetime.now(timezone.utc).timestamp()
+    with _reminders_rate_limit_lock:
+        last = _reminders_rate_limit[client_ip]
+        if now - last < 1.0:
+            abort(429, description="Rate limit exceeded: 1 request per second")
+        _reminders_rate_limit[client_ip] = now
+
+
+def _twilio_webhook_url() -> str:
+    """Build the URL Twilio used for signature validation (proxy-aware)."""
+    proto = request.headers.get("X-Forwarded-Proto")
+    if proto:
+        scheme = proto.split(",")[0].strip().lower() or "https"
+    else:
+        scheme = request.scheme
+    host = request.headers.get("X-Forwarded-Host") or request.host
+    path = request.full_path.rstrip("?") if request.full_path else request.path
+    return f"{scheme}://{host}{path}"
+
+
 @app.get("/health")
 def health() -> Any:
     return jsonify({"status": "ok"})
@@ -192,18 +209,9 @@ def terms_and_conditions() -> Any:
     return render_template("terms_and_conditions.html")
 
 
-@app.post("/track")
-def track() -> Any:
-    metadata = _request_metadata()
-    if db is None:
-        abort(500, description="Firestore client is not configured")
-    doc_ref = db.collection(COLLECTION_NAME).document()
-    doc_ref.set(metadata)
-    return jsonify({"saved": True, "doc_id": doc_ref.id, "collection": COLLECTION_NAME})
-
-
 @app.get("/events/reminders")
 def list_reminders() -> Any:
+    _check_reminders_rate_limit()
     reminders = _require_store().list_reminders(limit=25)
     return jsonify({"items": [_serialize_datetimes(item) for item in reminders]})
 
@@ -272,7 +280,8 @@ def receive_sms() -> Response:
 
     signature = request.headers.get("X-Twilio-Signature", "")
     validator = RequestValidator(TWILIO_AUTH_TOKEN)
-    is_valid = validator.validate(request.url, request.form.to_dict(flat=True), signature)
+    webhook_url = _twilio_webhook_url()
+    is_valid = validator.validate(webhook_url, request.form.to_dict(flat=True), signature)
     if not is_valid:
         abort(403, description="Invalid Twilio signature")
 

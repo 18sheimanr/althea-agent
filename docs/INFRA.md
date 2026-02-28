@@ -67,7 +67,6 @@ Required GitHub repository variables:
 - `GCP_PROJECT_ID`
 - `GCP_REGION`
 - `CLOUD_RUN_SERVICE_NAME`
-- `FIRESTORE_COLLECTION`
 - `ARTIFACT_REPO`
 - `IMAGE_NAME`
 

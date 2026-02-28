@@ -50,7 +50,6 @@ flowchart TD
 
 - `GET /health`
 - `GET /`
-- `POST /track` (basic metadata write)
 - `POST /receive-sms` (Twilio inbound)
 - `GET /events/reminders`
 - `POST /internal/events/agent-hook` (OIDC-protected trigger for reminders)
@@ -78,7 +77,6 @@ python app.py
 ```bash
 curl http://localhost:8080/health
 curl http://localhost:8080/
-curl -X POST http://localhost:8080/track
 curl http://localhost:8080/events/reminders
 ```
 
@@ -119,7 +117,6 @@ gh workflow run "Deploy to Cloud Run"
 - `GCP_PROJECT_ID`
 - `GCP_REGION`
 - `CLOUD_RUN_SERVICE_NAME`
-- `FIRESTORE_COLLECTION`
 - `ARTIFACT_REPO`
 - `IMAGE_NAME`
 
