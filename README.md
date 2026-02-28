@@ -54,5 +54,7 @@ Repository secrets:
 - `WIF_PROVIDER`
 - `WIF_SERVICE_ACCOUNT`
 - `RUNTIME_SERVICE_ACCOUNT`
+- `TWILIO_AUTH_TOKEN`
+- `TWILIO_ACCOUNT_SID`
 
 If any of these are missing, ask a repo/GCP admin to set them.

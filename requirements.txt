@@ -1,3 +1,4 @@
 Flask==3.1.0
 gunicorn==23.0.0
 google-cloud-firestore==2.20.1
+twilio==9.5.2
