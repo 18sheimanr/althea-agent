@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import time
 from contextvars import ContextVar
@@ -11,6 +12,7 @@ from conversation_store import ConversationStore
 CURRENT_CONVERSATION_ID: ContextVar[str] = ContextVar("conversation_id", default="")
 CURRENT_PHONE_NUMBER: ContextVar[str] = ContextVar("phone_number", default="")
 NEW_YORK_TZ = ZoneInfo("America/New_York")
+logger = logging.getLogger(__name__)
 
 
 def new_york_now_iso() -> str:
@@ -50,6 +52,14 @@ class AthenaAgentRuntime:
             )
             return {"status": "ok", "event": event}
         except Exception as exc:
+            logger.exception(
+                "Agent event creation failed conversation_id=%s phone_number=%s event_type=%s title=%s due_at=%s",
+                conversation_id,
+                phone_number,
+                event_type,
+                title,
+                due_at or "",
+            )
             return {"status": "error", "message": str(exc)}
 
     @staticmethod
@@ -134,7 +144,7 @@ class AthenaAgentRuntime:
                     parts=[types.Part(text=f"Conversation summary: {rolling_summary}")],
                 ),
             )
-            self._session_service.append_event(session=session, event=summary_event)
+            await self._session_service.append_event(session=session, event=summary_event)
 
         history = self._history_messages_for_seed(context=context, user_text=user_text)
         role_to_author = {
@@ -152,7 +162,7 @@ class AthenaAgentRuntime:
                 author=author,
                 content=types.Content(role=content_role, parts=[types.Part(text=text)]),
             )
-            self._session_service.append_event(session=session, event=event)
+            await self._session_service.append_event(session=session, event=event)
 
     @staticmethod
     def _prompt_with_runtime_context(user_text: str) -> str:

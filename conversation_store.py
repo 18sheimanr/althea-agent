@@ -1,3 +1,4 @@
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -6,6 +7,7 @@ from google.cloud import firestore
 from reminder_scheduler import ReminderTaskScheduler
 
 ALLOWED_EVENT_TYPES = {"full day", "partial day", "reminder"}
+logger = logging.getLogger(__name__)
 
 
 def utc_now() -> datetime:
@@ -161,6 +163,11 @@ class ConversationStore:
             if not due_at:
                 raise ValueError("reminder events require due_at in ISO-8601 UTC format")
             if self.reminder_scheduler is None:
+                logger.error(
+                    "Reminder scheduler is not configured for conversation_id=%s phone_number=%s",
+                    conversation_id,
+                    phone_number,
+                )
                 raise RuntimeError("Reminder scheduler is not configured")
 
             try:
@@ -173,6 +180,13 @@ class ConversationStore:
                 doc_ref.set(schedule_updates, merge=True)
                 payload.update(schedule_updates)
             except Exception as exc:
+                logger.exception(
+                    "Failed to schedule reminder event_id=%s conversation_id=%s phone_number=%s due_at=%s",
+                    doc_ref.id,
+                    conversation_id,
+                    phone_number,
+                    due_at,
+                )
                 doc_ref.set(
                     {
                         "schedule_status": "failed",
