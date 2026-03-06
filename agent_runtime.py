@@ -2,12 +2,19 @@ import asyncio
 import os
 import time
 from contextvars import ContextVar
+from datetime import datetime
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from conversation_store import ConversationStore
 
 CURRENT_CONVERSATION_ID: ContextVar[str] = ContextVar("conversation_id", default="")
 CURRENT_PHONE_NUMBER: ContextVar[str] = ContextVar("phone_number", default="")
+NEW_YORK_TZ = ZoneInfo("America/New_York")
+
+
+def new_york_now_iso() -> str:
+    return datetime.now(NEW_YORK_TZ).replace(microsecond=0).isoformat()
 
 
 class AthenaAgentRuntime:
@@ -48,21 +55,36 @@ class AthenaAgentRuntime:
     def _build_root_agent(self) -> Any:
         from google.adk.agents.llm_agent import Agent
 
+        tools = [self._create_event_tool]
+        try:
+            from google.adk.tools import google_search
+
+            tools.append(google_search)
+        except ImportError:
+            # Keep the core SMS flow working even if the search tool is unavailable.
+            pass
+
         instruction = (
             "You are Athena, an SMS planning assistant. "
             "You help the user with scheduling and reminders. "
+            "You can use Google Search when the user asks for current or web-based info. "
             "When asked to save a task/event, call create_event_tool. "
             "Event types allowed: full day, partial day, reminder. "
             "For reminders, always include due_at in ISO-8601 UTC format "
             "(example: 2026-03-01T15:30:00Z). "
-            "Keep SMS responses concise and practical."
+            "The current datetime will be included in each user turn in America/New_York time; "
+            "use New York local time, including daylight saving time, as the default reference timezone "
+            "to resolve relative times like 'in 1 hour' or 'tomorrow morning'. "
+            "Keep SMS responses very concise, chill, and casual, like a young dude texting. "
+            "Usually reply in 1 short sentence, or 2 short sentences max. "
+            "No corporate tone, no fluff, no long explanations."
         )
         return Agent(
             model=self.model_name,
             name="athena_sms_agent",
             description="SMS scheduler assistant for one user.",
             instruction=instruction,
-            tools=[self._create_event_tool],
+            tools=tools,
         )
 
     def _ensure_runner(self) -> None:
@@ -127,6 +149,14 @@ class AthenaAgentRuntime:
             )
             self._session_service.append_event(session=session, event=event)
 
+    @staticmethod
+    def _prompt_with_runtime_context(user_text: str) -> str:
+        return (
+            f"Current datetime (America/New_York): {new_york_now_iso()}\n"
+            "Use this timestamp as the reference for any relative time requests.\n"
+            f"User message: {user_text}"
+        )
+
     async def _run_async(self, conversation_id: str, user_text: str, context: Dict[str, Any]) -> str:
         from google.genai import types
 
@@ -139,7 +169,8 @@ class AthenaAgentRuntime:
         )
         await self._seed_session_history(session=session, context=context, user_text=user_text)
 
-        new_message = types.Content(role="user", parts=[types.Part(text=user_text)])
+        prompt_user_text = self._prompt_with_runtime_context(user_text)
+        new_message = types.Content(role="user", parts=[types.Part(text=prompt_user_text)])
         response_chunks: List[str] = []
         async for event in self._runner.run_async(
             user_id=conversation_id,
