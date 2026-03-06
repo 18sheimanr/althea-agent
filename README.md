@@ -5,7 +5,7 @@ Production Flask service for an SMS-first assistant:
 - Uses Firestore for conversation/event persistence
 - Schedules reminder delivery with Cloud Tasks
 - Handles inbound SMS from Twilio at `/receive-sms`
-- Runs Google ADK agent with Gemini (`google-adk==1.26.0`)
+- Runs Google ADK agent with Gemini on Vertex AI (`google-adk==1.26.0`)
 - Exposes a reminders viewer at `/events/reminders`
 
 
@@ -70,6 +70,14 @@ pip install -r requirements.txt
 gcloud auth application-default login
 set -a && source .env && set +a
 python app.py
+```
+
+Local auth uses Application Default Credentials. For Vertex-backed Gemini, set:
+
+```bash
+export GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
+export GOOGLE_CLOUD_LOCATION="us-central1"
+export GOOGLE_GENAI_USE_VERTEXAI=true
 ```
 
 ### Local smoke checks
@@ -141,9 +149,13 @@ gh workflow run "Deploy to Cloud Run"
 - `TWILIO_AUTH_TOKEN`
 - `TWILIO_ACCOUNT_SID`
 
-### Secrets (recommended/optional)
+No Gemini API key is required in production. Cloud Run uses its runtime service account
+with Vertex AI via Application Default Credentials.
 
-- `GOOGLE_API_KEY` (recommended for Gemini auth path used by app)
+### Runtime IAM (required)
+
+- Cloud Run runtime service account must have `roles/datastore.user`
+- Cloud Run runtime service account must have `roles/aiplatform.user`
 
 ## Firestore Indexes (important)
 

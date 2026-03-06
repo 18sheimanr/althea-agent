@@ -33,7 +33,9 @@ Application code can evolve freely; this baseline infra should stay mostly uncha
 
 - **Account:** `athena-cloudrun-runtime@your-gcp-project-id.iam.gserviceaccount.com`
 - **Purpose:** Identity used by running container
-- **Role:** `roles/datastore.user` (Firestore read/write)
+- **Roles:**
+  - `roles/datastore.user` (Firestore read/write)
+  - `roles/aiplatform.user` (Vertex AI model access)
 
 ### GitHub Deployer Service Account
 
