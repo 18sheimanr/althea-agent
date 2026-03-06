@@ -52,17 +52,22 @@ class AthenaAgentRuntime:
         except Exception as exc:
             return {"status": "error", "message": str(exc)}
 
+    @staticmethod
+    def _build_google_search_tool() -> Optional[Any]:
+        try:
+            from google.adk.tools.google_search_tool import GoogleSearchTool
+
+            return GoogleSearchTool(bypass_multi_tools_limit=True)
+        except ImportError:
+            return None
+
     def _build_root_agent(self) -> Any:
         from google.adk.agents.llm_agent import Agent
 
         tools = [self._create_event_tool]
-        try:
-            from google.adk.tools import google_search
-
-            tools.append(google_search)
-        except ImportError:
-            # Keep the core SMS flow working even if the search tool is unavailable.
-            pass
+        google_search_tool = self._build_google_search_tool()
+        if google_search_tool is not None:
+            tools.append(google_search_tool)
 
         instruction = (
             "You are Athena, an SMS planning assistant. "

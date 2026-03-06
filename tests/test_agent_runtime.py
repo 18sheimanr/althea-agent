@@ -29,3 +29,10 @@ def test_prompt_with_runtime_context_includes_current_datetime(monkeypatch):
     assert "Current datetime (America/New_York): 2026-03-06T15:15:00-05:00" in prompt
     assert "Use this timestamp as the reference for any relative time requests." in prompt
     assert "User message: Remind me in 1 hour" in prompt
+
+
+def test_build_google_search_tool_enables_multi_tool_bypass():
+    tool = AthenaAgentRuntime._build_google_search_tool()
+
+    assert tool is not None
+    assert getattr(tool, "bypass_multi_tools_limit", False) is True
