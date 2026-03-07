@@ -190,6 +190,22 @@ def _twilio_webhook_url() -> str:
     return f"{scheme}://{host}{path}"
 
 
+def _build_reminder_prompt(event_type: str, title: str, due_at: str, details: str) -> str:
+    details_text = details.strip() or "(none)"
+    due_at_text = due_at.strip() or "(unspecified)"
+    return (
+        "A scheduled reminder is firing right now.\n"
+        "Send the user a short SMS reminder about it.\n"
+        "Reply with only the text that should be sent to the user.\n"
+        "Do not mention internal triggers, background jobs, or system metadata.\n"
+        "Do not create or modify any events unless the user explicitly asked to reschedule.\n"
+        f"Event type: {event_type}\n"
+        f"Title: {title}\n"
+        f"Due at: {due_at_text}\n"
+        f"Details: {details_text}"
+    )
+
+
 @app.get("/health")
 def health() -> Any:
     return jsonify({"status": "ok"})
@@ -245,6 +261,12 @@ def event_hook() -> Any:
     trigger_message = (
         f"Event trigger received. type={event_type}, title={title}, due_at={due_at}, details={details}"
     )
+    reminder_prompt = _build_reminder_prompt(
+        event_type=event_type,
+        title=title,
+        due_at=due_at,
+        details=details,
+    )
     _require_store().append_message_event(
         conversation_id=conversation_id,
         role="system",
@@ -259,7 +281,7 @@ def event_hook() -> Any:
         result = _require_agent_runtime().run_agent_turn(
             conversation_id=conversation_id,
             phone_number=phone_number,
-            user_text=trigger_message,
+            user_text=reminder_prompt,
             context=context,
         )
     except Exception as exc:

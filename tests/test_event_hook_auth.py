@@ -22,7 +22,11 @@ class FakeStore:
 
 
 class FakeRuntime:
+    def __init__(self):
+        self.calls = []
+
     def run_agent_turn(self, **kwargs):
+        self.calls.append(kwargs)
         return {"reply_text": "Triggered response", "trace": [{"event_id": "e1", "part_kinds": ["text"]}]}
 
 
@@ -62,7 +66,8 @@ def test_event_hook_requires_tasks_service_account_config(monkeypatch):
 
 def test_event_hook_accepts_valid_oidc_and_service_account(monkeypatch):
     monkeypatch.setattr(app_module, "store", FakeStore())
-    monkeypatch.setattr(app_module, "agent_runtime", FakeRuntime())
+    fake_runtime = FakeRuntime()
+    monkeypatch.setattr(app_module, "agent_runtime", fake_runtime)
     monkeypatch.setattr(app_module, "TASKS_CALLER_SERVICE_ACCOUNT", "tasks-caller@example.iam.gserviceaccount.com")
     _patch_sms_send(monkeypatch)
 
@@ -84,6 +89,9 @@ def test_event_hook_accepts_valid_oidc_and_service_account(monkeypatch):
     assert response.status_code == 200
     assert response.get_json()["ok"] is True
     assert response.get_json()["sms"]["sid"] == "SM123"
+    assert len(fake_runtime.calls) == 1
+    assert "A scheduled reminder is firing right now." in fake_runtime.calls[0]["user_text"]
+    assert "Title: Take medicine" in fake_runtime.calls[0]["user_text"]
 
 
 def test_event_hook_idempotent_skip_duplicate_event_id(monkeypatch):
