@@ -1,6 +1,7 @@
 import logging
 import os
 import threading
+import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict
@@ -87,11 +88,66 @@ def _twiml_message(text: str) -> str:
 def _serialize_datetimes(payload: Dict[str, Any]) -> Dict[str, Any]:
     output: Dict[str, Any] = {}
     for key, value in payload.items():
-        if isinstance(value, datetime):
-            output[key] = value.astimezone(timezone.utc).isoformat()
-        else:
-            output[key] = value
+        output[key] = _serialize_value(value)
     return output
+
+
+def _serialize_value(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).isoformat()
+    if isinstance(value, dict):
+        return {k: _serialize_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_serialize_value(v) for v in value]
+    return value
+
+
+def _shorten(text: str, max_len: int = 300) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + "..."
+
+
+def _append_debug_step(
+    conversation_id: str,
+    phone_number: str,
+    step_type: str,
+    flow: str,
+    request_id: str,
+    payload: Dict[str, Any] | None = None,
+    event_id: str = "",
+) -> None:
+    if store is None or not hasattr(store, "append_debug_step"):
+        return
+    try:
+        store.append_debug_step(
+            conversation_id=conversation_id,
+            phone_number=phone_number,
+            step_type=step_type,
+            flow=flow,
+            request_id=request_id,
+            payload=payload or {},
+            event_id=event_id,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to append debug step conversation_id=%s request_id=%s step_type=%s",
+            conversation_id,
+            request_id,
+            step_type,
+        )
+
+
+def _safe_timestamp(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        normalized = value.replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(normalized)
+        except ValueError:
+            return datetime.min.replace(tzinfo=timezone.utc)
+    return datetime.min.replace(tzinfo=timezone.utc)
 
 
 def _assert_allowed_sender(phone_number: str) -> None:
@@ -196,8 +252,6 @@ def _build_reminder_prompt(event_type: str, title: str, due_at: str, details: st
     return (
         "A scheduled reminder is firing right now.\n"
         "Send the user a short SMS reminder about it.\n"
-        "Reply with only the text that should be sent to the user.\n"
-        "Do not mention internal triggers, background jobs, or system metadata.\n"
         "Do not create or modify any events unless the user explicitly asked to reschedule.\n"
         f"Event type: {event_type}\n"
         f"Title: {title}\n"
@@ -214,6 +268,11 @@ def health() -> Any:
 @app.get("/")
 def index() -> Any:
     return render_template("index.html")
+
+
+@app.get("/debugger")
+def debugger_page() -> Any:
+    return render_template("debugger.html")
 
 
 @app.get("/privacy-policy")
@@ -233,9 +292,72 @@ def list_reminders() -> Any:
     return jsonify({"items": [_serialize_datetimes(item) for item in reminders]})
 
 
+@app.get("/events/debugger")
+def debugger_events() -> Any:
+    limit_raw = request.args.get("limit", "200")
+    try:
+        limit = max(10, min(500, int(limit_raw)))
+    except ValueError:
+        abort(400, description="limit must be an integer")
+
+    phone_number = request.args.get("phone_number", TWILIO_ALLOWED_FROM)
+    _assert_allowed_sender(phone_number)
+    conversation_id = conversation_id_for_phone(phone_number)
+    current_store = _require_store()
+
+    messages = []
+    if hasattr(current_store, "list_messages"):
+        messages = current_store.list_messages(conversation_id=conversation_id, limit=limit)
+    debug_steps = []
+    if hasattr(current_store, "list_debug_timeline"):
+        debug_steps = current_store.list_debug_timeline(conversation_id=conversation_id, limit=limit)
+    reminders = current_store.list_reminders(limit=limit, phone_number=phone_number)
+
+    timeline = []
+    for row in messages:
+        timeline.append(
+            {
+                "kind": "message",
+                "created_at": row.get("created_at"),
+                "request_id": row.get("metadata", {}).get("request_id", ""),
+                "data": row,
+            }
+        )
+    for row in reminders:
+        timeline.append(
+            {
+                "kind": "reminder_event",
+                "created_at": row.get("created_at"),
+                "request_id": "",
+                "data": row,
+            }
+        )
+    for row in debug_steps:
+        timeline.append(
+            {
+                "kind": "debug_step",
+                "created_at": row.get("created_at"),
+                "request_id": row.get("request_id", ""),
+                "data": row,
+            }
+        )
+
+    timeline.sort(key=lambda item: _safe_timestamp(item.get("created_at")), reverse=True)
+    payload = {
+        "phone_number": phone_number,
+        "conversation_id": conversation_id,
+        "messages": [_serialize_datetimes(row) for row in messages],
+        "reminders": [_serialize_datetimes(row) for row in reminders],
+        "debug_steps": [_serialize_datetimes(row) for row in debug_steps],
+        "timeline": [_serialize_datetimes(row) for row in timeline],
+    }
+    return jsonify(payload)
+
+
 @app.post("/internal/events/agent-hook")
 def event_hook() -> Any:
     _verify_internal_hook_identity()
+    request_id = str(uuid.uuid4())
 
     payload = request.get_json(silent=True) or {}
     phone_number = payload.get("phone_number", TWILIO_ALLOWED_FROM)
@@ -248,6 +370,22 @@ def event_hook() -> Any:
     due_at = payload.get("due_at", "")
 
     conversation_id = conversation_id_for_phone(phone_number)
+    _append_debug_step(
+        conversation_id=conversation_id,
+        phone_number=phone_number,
+        step_type="trigger_received",
+        flow="reminder_hook",
+        request_id=request_id,
+        payload={
+            "event_id": event_id,
+            "event_type": event_type,
+            "title": title,
+            "details": details,
+            "due_at": due_at,
+            "raw_payload": payload,
+        },
+        event_id=event_id,
+    )
 
     if event_id and _require_store().was_reminder_delivered(event_id):
         logger.info(
@@ -255,6 +393,15 @@ def event_hook() -> Any:
             event_id,
             conversation_id,
             title,
+        )
+        _append_debug_step(
+            conversation_id=conversation_id,
+            phone_number=phone_number,
+            step_type="reminder_duplicate_skip",
+            flow="reminder_hook",
+            request_id=request_id,
+            payload={"event_id": event_id, "title": title},
+            event_id=event_id,
         )
         return jsonify({"ok": True, "reply_text": "(already delivered)", "sms": None, "duplicate": True})
 
@@ -269,13 +416,44 @@ def event_hook() -> Any:
     )
     _require_store().append_message_event(
         conversation_id=conversation_id,
-        role="system",
+        role="user",
         content=trigger_message,
         phone_number=phone_number,
         source="trigger",
-        metadata={"kind": "reminder_trigger", "event_id": event_id} if event_id else None,
+        metadata=(
+            {"kind": "reminder_trigger", "event_id": event_id, "request_id": request_id}
+            if event_id
+            else {"kind": "reminder_trigger", "request_id": request_id}
+        ),
+    )
+    _append_debug_step(
+        conversation_id=conversation_id,
+        phone_number=phone_number,
+        step_type="trigger_saved",
+        flow="reminder_hook",
+        request_id=request_id,
+        payload={"trigger_message": trigger_message},
+        event_id=event_id,
     )
     context = _require_store().load_conversation_context(conversation_id)
+    _append_debug_step(
+        conversation_id=conversation_id,
+        phone_number=phone_number,
+        step_type="context_loaded",
+        flow="reminder_hook",
+        request_id=request_id,
+        payload={"context": _serialize_value(context)},
+        event_id=event_id,
+    )
+    _append_debug_step(
+        conversation_id=conversation_id,
+        phone_number=phone_number,
+        step_type="llm_call_started",
+        flow="reminder_hook",
+        request_id=request_id,
+        payload={"user_text": reminder_prompt},
+        event_id=event_id,
+    )
 
     try:
         result = _require_agent_runtime().run_agent_turn(
@@ -285,6 +463,15 @@ def event_hook() -> Any:
             context=context,
         )
     except Exception as exc:
+        _append_debug_step(
+            conversation_id=conversation_id,
+            phone_number=phone_number,
+            step_type="error",
+            flow="reminder_hook",
+            request_id=request_id,
+            payload={"stage": "run_agent_turn", "error": str(exc)},
+            event_id=event_id,
+        )
         logger.exception(
             "Agent turn failed event_id=%s conversation_id=%s type=%s title=%s due_at=%s",
             event_id,
@@ -297,17 +484,58 @@ def event_hook() -> Any:
 
     assistant_text = result["reply_text"]
     trace = result.get("trace", [])
+    runtime_debug = result.get("debug", {})
+    _append_debug_step(
+        conversation_id=conversation_id,
+        phone_number=phone_number,
+        step_type="llm_call_finished",
+        flow="reminder_hook",
+        request_id=request_id,
+        payload={
+            "assistant_text": assistant_text,
+            "trace": trace,
+            "runtime_debug": runtime_debug,
+        },
+        event_id=event_id,
+    )
 
     _require_store().save_agent_response(
         conversation_id=conversation_id,
         phone_number=phone_number,
         content=assistant_text,
-        source="agent",
+        source="assistant",
+    )
+    _append_debug_step(
+        conversation_id=conversation_id,
+        phone_number=phone_number,
+        step_type="assistant_saved",
+        flow="reminder_hook",
+        request_id=request_id,
+        payload={"assistant_preview": _shorten(assistant_text)},
+        event_id=event_id,
     )
 
     try:
+        _append_debug_step(
+            conversation_id=conversation_id,
+            phone_number=phone_number,
+            step_type="twilio_send_attempt",
+            flow="reminder_hook",
+            request_id=request_id,
+            payload={"to_number": phone_number, "assistant_preview": _shorten(assistant_text)},
+            event_id=event_id,
+        )
         send_result = _send_sms_via_twilio(to_number=phone_number, body=assistant_text)
     except Exception as exc:
+        _append_debug_step(
+            conversation_id=conversation_id,
+            phone_number=phone_number,
+            step_type="error",
+            flow="reminder_hook",
+            request_id=request_id,
+            payload={"stage": "twilio_send", "error": str(exc)},
+            event_id=event_id,
+        )
         logger.exception(
             "SMS send failed event_id=%s conversation_id=%s assistant_text=%s trace_len=%d",
             event_id,
@@ -316,9 +544,27 @@ def event_hook() -> Any:
             len(trace),
         )
         raise
+    _append_debug_step(
+        conversation_id=conversation_id,
+        phone_number=phone_number,
+        step_type="twilio_send_result",
+        flow="reminder_hook",
+        request_id=request_id,
+        payload={"send_result": send_result},
+        event_id=event_id,
+    )
 
     if event_id:
         _require_store().mark_reminder_delivered(event_id)
+        _append_debug_step(
+            conversation_id=conversation_id,
+            phone_number=phone_number,
+            step_type="reminder_marked_delivered",
+            flow="reminder_hook",
+            request_id=request_id,
+            payload={"event_id": event_id},
+            event_id=event_id,
+        )
 
     return jsonify({"ok": True, "reply_text": assistant_text, "sms": send_result})
 
@@ -342,6 +588,7 @@ def receive_sms() -> Response:
     if not TWILIO_AUTH_TOKEN:
         abort(500, description="TWILIO_AUTH_TOKEN is not configured")
 
+    request_id = str(uuid.uuid4())
     signature = request.headers.get("X-Twilio-Signature", "")
     validator = RequestValidator(TWILIO_AUTH_TOKEN)
     webhook_url = _twilio_webhook_url()
@@ -354,14 +601,39 @@ def receive_sms() -> Response:
     incoming_text = request.form.get("Body", "").strip() or "(empty message)"
 
     conversation_id = conversation_id_for_phone(phone_number)
+    _append_debug_step(
+        conversation_id=conversation_id,
+        phone_number=phone_number,
+        step_type="incoming_sms",
+        flow="sms",
+        request_id=request_id,
+        payload={"body": incoming_text},
+    )
     _require_store().append_message_event(
         conversation_id=conversation_id,
         role="user",
         content=incoming_text,
         phone_number=phone_number,
         source="sms",
+        metadata={"request_id": request_id},
     )
     context = _require_store().load_conversation_context(conversation_id)
+    _append_debug_step(
+        conversation_id=conversation_id,
+        phone_number=phone_number,
+        step_type="context_loaded",
+        flow="sms",
+        request_id=request_id,
+        payload={"context": _serialize_value(context)},
+    )
+    _append_debug_step(
+        conversation_id=conversation_id,
+        phone_number=phone_number,
+        step_type="llm_call_started",
+        flow="sms",
+        request_id=request_id,
+        payload={"user_text": incoming_text},
+    )
 
     result = _require_agent_runtime().run_agent_turn(
         conversation_id=conversation_id,
@@ -370,11 +642,31 @@ def receive_sms() -> Response:
         context=context,
     )
     assistant_text = result["reply_text"]
+    _append_debug_step(
+        conversation_id=conversation_id,
+        phone_number=phone_number,
+        step_type="llm_call_finished",
+        flow="sms",
+        request_id=request_id,
+        payload={
+            "assistant_text": assistant_text,
+            "trace": result.get("trace", []),
+            "runtime_debug": result.get("debug", {}),
+        },
+    )
     _require_store().save_agent_response(
         conversation_id=conversation_id,
         phone_number=phone_number,
         content=assistant_text,
         source="agent",
+    )
+    _append_debug_step(
+        conversation_id=conversation_id,
+        phone_number=phone_number,
+        step_type="assistant_saved",
+        flow="sms",
+        request_id=request_id,
+        payload={"assistant_preview": _shorten(assistant_text)},
     )
 
     rolling_summary = (
@@ -385,9 +677,25 @@ def receive_sms() -> Response:
     _require_store().update_conversation_state(
         conversation_id=conversation_id, rolling_summary=rolling_summary
     )
+    _append_debug_step(
+        conversation_id=conversation_id,
+        phone_number=phone_number,
+        step_type="conversation_state_updated",
+        flow="sms",
+        request_id=request_id,
+        payload={"rolling_summary_preview": _shorten(rolling_summary)},
+    )
 
     # Twilio reads TwiML from the webhook response and sends it back to the sender.
     twiml = _twiml_message(assistant_text)
+    _append_debug_step(
+        conversation_id=conversation_id,
+        phone_number=phone_number,
+        step_type="twiml_response_generated",
+        flow="sms",
+        request_id=request_id,
+        payload={"assistant_preview": _shorten(assistant_text)},
+    )
     return Response(twiml, status=200, mimetype="application/xml")
 
 

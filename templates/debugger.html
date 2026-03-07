@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Athena Conversation Debugger</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        font-family: Arial, sans-serif;
+        margin: 1rem auto;
+        max-width: 1200px;
+        padding: 0 1rem 2rem;
+      }
+      .row {
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .card {
+        border: 1px solid #6664;
+        border-radius: 8px;
+        padding: 0.8rem;
+        margin-top: 0.8rem;
+      }
+      .badge {
+        display: inline-block;
+        padding: 0.15rem 0.45rem;
+        border-radius: 999px;
+        font-size: 0.76rem;
+        margin-right: 0.4rem;
+        border: 1px solid #6666;
+      }
+      .timestamp {
+        font-size: 0.8rem;
+        opacity: 0.8;
+      }
+      .stepType {
+        font-weight: 700;
+      }
+      pre {
+        margin: 0.5rem 0 0;
+        overflow-x: auto;
+        white-space: pre-wrap;
+        border: 1px solid #6664;
+        border-radius: 6px;
+        padding: 0.6rem;
+      }
+      input, select, button {
+        padding: 0.4rem 0.55rem;
+      }
+      .muted {
+        opacity: 0.75;
+        font-size: 0.9rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Conversation Debugger</h1>
+    <p class="muted">Full journey view for +15555550100 (messages, reminders, debug steps).</p>
+
+    <div class="card">
+      <div class="row">
+        <label for="flowFilter">Flow</label>
+        <select id="flowFilter">
+          <option value="all">All</option>
+          <option value="sms">SMS</option>
+          <option value="reminder_hook">Reminder Hook</option>
+        </select>
+        <label for="searchText">Search</label>
+        <input id="searchText" type="text" placeholder="step type, request id, payload text" size="36" />
+        <label for="limit">Limit</label>
+        <input id="limit" type="number" min="10" max="500" value="200" />
+        <button id="refreshBtn" type="button">Refresh</button>
+        <label>
+          <input id="autoRefresh" type="checkbox" checked />
+          Auto refresh (5s)
+        </label>
+      </div>
+      <div id="meta" class="muted" style="margin-top: 0.6rem;"></div>
+    </div>
+
+    <div id="timeline"></div>
+
+    <script>
+      const timelineEl = document.getElementById("timeline");
+      const flowFilterEl = document.getElementById("flowFilter");
+      const searchTextEl = document.getElementById("searchText");
+      const limitEl = document.getElementById("limit");
+      const refreshBtn = document.getElementById("refreshBtn");
+      const metaEl = document.getElementById("meta");
+      const autoRefreshEl = document.getElementById("autoRefresh");
+
+      let latestData = null;
+
+      function fmtDate(raw) {
+        if (!raw) return "(no timestamp)";
+        const d = new Date(raw);
+        if (Number.isNaN(d.getTime())) return String(raw);
+        return d.toLocaleString();
+      }
+
+      function badge(kind, value) {
+        const span = document.createElement("span");
+        span.className = "badge";
+        span.textContent = `${kind}: ${value || "-"}`;
+        return span;
+      }
+
+      function rowText(row) {
+        return JSON.stringify(row).toLowerCase();
+      }
+
+      function renderTimeline() {
+        if (!latestData) return;
+        const flowValue = flowFilterEl.value;
+        const searchValue = searchTextEl.value.trim().toLowerCase();
+        const timeline = latestData.timeline || [];
+
+        const grouped = new Map();
+        for (const item of timeline) {
+          const requestId = item.request_id || "no_request_id";
+          if (!grouped.has(requestId)) grouped.set(requestId, []);
+          grouped.get(requestId).push(item);
+        }
+
+        timelineEl.innerHTML = "";
+        for (const [requestId, items] of grouped.entries()) {
+          const filtered = items.filter((item) => {
+            const flow = item?.data?.flow || "unknown";
+            if (flowValue !== "all" && flow !== flowValue) return false;
+            if (searchValue && !rowText(item).includes(searchValue)) return false;
+            return true;
+          });
+          if (!filtered.length) continue;
+
+          const groupCard = document.createElement("div");
+          groupCard.className = "card";
+
+          const title = document.createElement("div");
+          title.innerHTML = `<strong>request_id:</strong> ${requestId}`;
+          groupCard.appendChild(title);
+
+          for (const item of filtered) {
+            const row = document.createElement("div");
+            row.className = "card";
+
+            const kind = item.kind || "unknown";
+            const data = item.data || {};
+            const stepType = data.step_type || data.source || data.type || kind;
+            const flow = data.flow || (kind === "message" ? "sms" : "n/a");
+            const ts = item.created_at || data.created_at || "";
+
+            const header = document.createElement("div");
+            header.appendChild(badge("kind", kind));
+            header.appendChild(badge("flow", flow));
+            header.appendChild(badge("step", stepType));
+
+            const tsSpan = document.createElement("span");
+            tsSpan.className = "timestamp";
+            tsSpan.textContent = ` ${fmtDate(ts)}`;
+            header.appendChild(tsSpan);
+            row.appendChild(header);
+
+            const details = document.createElement("details");
+            details.style.marginTop = "0.45rem";
+            const summary = document.createElement("summary");
+            summary.textContent = "View payload";
+            details.appendChild(summary);
+
+            const pre = document.createElement("pre");
+            pre.textContent = JSON.stringify(data, null, 2);
+            details.appendChild(pre);
+            row.appendChild(details);
+
+            groupCard.appendChild(row);
+          }
+          timelineEl.appendChild(groupCard);
+        }
+      }
+
+      async function loadData() {
+        const limit = Number(limitEl.value) || 200;
+        const res = await fetch(`/events/debugger?limit=${encodeURIComponent(limit)}`);
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`Request failed: ${res.status} ${text}`);
+        }
+        latestData = await res.json();
+        metaEl.textContent = `conversation_id=${latestData.conversation_id} | messages=${latestData.messages.length} | reminders=${latestData.reminders.length} | debug_steps=${latestData.debug_steps.length}`;
+        renderTimeline();
+      }
+
+      refreshBtn.addEventListener("click", () => loadData().catch((err) => (metaEl.textContent = err.message)));
+      flowFilterEl.addEventListener("change", renderTimeline);
+      searchTextEl.addEventListener("input", renderTimeline);
+
+      setInterval(() => {
+        if (!autoRefreshEl.checked) return;
+        loadData().catch((err) => (metaEl.textContent = err.message));
+      }, 5000);
+
+      loadData().catch((err) => (metaEl.textContent = err.message));
+    </script>
+  </body>
+</html>

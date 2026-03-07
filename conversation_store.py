@@ -135,6 +135,60 @@ class ConversationStore:
             source=source,
         )
 
+    def append_debug_step(
+        self,
+        conversation_id: str,
+        phone_number: str,
+        step_type: str,
+        flow: str,
+        request_id: str,
+        payload: Optional[Dict[str, Any]] = None,
+        event_id: str = "",
+    ) -> Dict[str, Any]:
+        """Write a structured debug timeline row for a conversation."""
+        created_at = utc_now()
+        row: Dict[str, Any] = {
+            "conversation_id": conversation_id,
+            "phone_number": phone_number,
+            "step_type": step_type,
+            "flow": flow,
+            "request_id": request_id,
+            "event_id": event_id,
+            "created_at": created_at,
+            "payload": payload or {},
+        }
+        self._conversation_ref(conversation_id).collection("debug_steps").document().set(row)
+        return row
+
+    def list_debug_timeline(self, conversation_id: str, limit: int = 200) -> List[Dict[str, Any]]:
+        query = (
+            self._conversation_ref(conversation_id)
+            .collection("debug_steps")
+            .order_by("created_at", direction=firestore.Query.DESCENDING)
+            .limit(limit)
+        )
+        rows: List[Dict[str, Any]] = []
+        for doc in query.stream():
+            row = doc.to_dict()
+            row["id"] = doc.id
+            rows.append(row)
+        return rows
+
+    def list_messages(self, conversation_id: str, limit: int = 200) -> List[Dict[str, Any]]:
+        query = (
+            self._conversation_ref(conversation_id)
+            .collection("messages")
+            .order_by("seq", direction=firestore.Query.DESCENDING)
+            .limit(limit)
+        )
+        rows: List[Dict[str, Any]] = []
+        for doc in query.stream():
+            row = doc.to_dict()
+            row["id"] = doc.id
+            rows.append(row)
+        rows.reverse()
+        return rows
+
     def update_conversation_state(
         self,
         conversation_id: str,
@@ -230,13 +284,11 @@ class ConversationStore:
                 raise
         return payload
 
-    def list_reminders(self, limit: int = 25) -> List[Dict[str, Any]]:
-        query = (
-            self.db.collection(self.events_collection)
-            .where("type", "==", "reminder")
-            .order_by("created_at", direction=firestore.Query.DESCENDING)
-            .limit(limit)
-        )
+    def list_reminders(self, limit: int = 25, phone_number: str = "") -> List[Dict[str, Any]]:
+        query = self.db.collection(self.events_collection).where("type", "==", "reminder")
+        if phone_number:
+            query = query.where("phone_number", "==", phone_number)
+        query = query.order_by("created_at", direction=firestore.Query.DESCENDING).limit(limit)
         reminders: List[Dict[str, Any]] = []
         for doc in query.stream():
             row = doc.to_dict()

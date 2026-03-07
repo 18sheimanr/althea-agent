@@ -5,6 +5,7 @@ class FakeStore:
     def __init__(self) -> None:
         self.messages = []
         self.updated = []
+        self.debug_steps = []
 
     def append_message_event(self, **kwargs):
         self.messages.append(kwargs)
@@ -19,6 +20,10 @@ class FakeStore:
 
     def update_conversation_state(self, **kwargs):
         self.updated.append(kwargs)
+
+    def append_debug_step(self, **kwargs):
+        self.debug_steps.append(kwargs)
+        return kwargs
 
 
 class FakeRuntime:
@@ -56,6 +61,8 @@ def test_receive_sms_valid_signature_and_sender(monkeypatch):
     assert response.status_code == 200
     assert "Agent reply" in response.get_data(as_text=True)
     assert fake_store.updated
+    assert fake_store.debug_steps
+    assert any(step.get("step_type") == "context_loaded" for step in fake_store.debug_steps)
 
 
 def test_receive_sms_invalid_signature(monkeypatch):

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import threading
 import time
 from contextvars import ContextVar
 from datetime import datetime
@@ -32,6 +33,8 @@ def new_york_now_iso() -> str:
 
 
 class AthenaAgentRuntime:
+    _runner_lock = threading.Lock()
+
     def __init__(self, store: ConversationStore) -> None:
         self.store = store
         self.app_name = "athena_adk"
@@ -106,8 +109,8 @@ class AthenaAgentRuntime:
             "The current datetime will be included in each user turn in America/New_York time; "
             "use New York local time, including daylight saving time, as the default reference timezone "
             "to resolve relative times like 'in 1 hour' or 'tomorrow morning'. "
-            "Keep SMS responses very concise, chill, and casual, like a young dude texting. "
-            "Usually reply in 1 short sentence, or 2-3 short sentences max. "
+            "Keep SMS responses very concise, chill, and casual, for texting. "
+            "Usually reply in 1-3 short sentences. "
             "No corporate tone, no fluff, no long explanations."
         )
         model = Gemini(
@@ -125,16 +128,19 @@ class AthenaAgentRuntime:
     def _ensure_runner(self) -> None:
         if self._runner is not None:
             return
-        from google.adk.runners import Runner
-        from google.adk.sessions import InMemorySessionService
+        with self._runner_lock:
+            if self._runner is not None:
+                return
+            from google.adk.runners import Runner
+            from google.adk.sessions import InMemorySessionService
 
-        self._root_agent = self._build_root_agent()
-        self._session_service = InMemorySessionService()
-        self._runner = Runner(
-            agent=self._root_agent,
-            app_name=self.app_name,
-            session_service=self._session_service,
-        )
+            self._root_agent = self._build_root_agent()
+            self._session_service = InMemorySessionService()
+            self._runner = Runner(
+                agent=self._root_agent,
+                app_name=self.app_name,
+                session_service=self._session_service,
+            )
 
     @staticmethod
     def _history_messages_for_seed(
@@ -193,7 +199,7 @@ class AthenaAgentRuntime:
 
     async def _run_async(
         self, conversation_id: str, user_text: str, context: Dict[str, Any]
-    ) -> Tuple[str, List[Dict[str, Any]]]:
+    ) -> Tuple[str, List[Dict[str, Any]], Dict[str, Any]]:
         from google.genai import types
 
         self._ensure_runner()
@@ -203,7 +209,20 @@ class AthenaAgentRuntime:
             user_id=conversation_id,
             session_id=session_id,
         )
+        history_for_seed = self._history_messages_for_seed(context=context, user_text=user_text)
         await self._seed_session_history(session=session, context=context, user_text=user_text)
+
+        history_seed_messages = []
+        for row in history_for_seed:
+            content = row.get("content", "") or ""
+            history_seed_messages.append(
+                {
+                    "role": row.get("role", "user"),
+                    "source": row.get("source", ""),
+                    "content_preview": content[:200] + ("..." if len(content) > 200 else ""),
+                    "metadata_kind": row.get("metadata", {}).get("kind", ""),
+                }
+            )
 
         prompt_user_text = self._prompt_with_runtime_context(user_text)
         new_message = types.Content(role="user", parts=[types.Part(text=prompt_user_text)])
@@ -276,6 +295,14 @@ class AthenaAgentRuntime:
                 )
                 break
 
+        runtime_debug = {
+            "prompt_user_text": prompt_user_text,
+            "history_seed_count": len(history_for_seed),
+            "history_seed_messages": history_seed_messages,
+            "tool_call_count": tool_call_count,
+            "trace_len": len(trace),
+        }
+
         if not response_chunks:
             logger.warning(
                 "Agent produced no text chunks conversation_id=%s session_id=%s trace_len=%d tool_call_count=%d",
@@ -287,8 +314,9 @@ class AthenaAgentRuntime:
             return (
                 "I could not generate a response right now. Please try again.",
                 trace,
+                runtime_debug,
             )
-        return response_chunks[-1], trace
+        return response_chunks[-1], trace, runtime_debug
 
     def run_agent_turn(
         self,
@@ -300,8 +328,8 @@ class AthenaAgentRuntime:
         conversation_token = CURRENT_CONVERSATION_ID.set(conversation_id)
         phone_token = CURRENT_PHONE_NUMBER.set(phone_number)
         try:
-            reply, trace = asyncio.run(self._run_async(conversation_id, user_text, context))
-            return {"reply_text": reply, "trace": trace}
+            reply, trace, debug = asyncio.run(self._run_async(conversation_id, user_text, context))
+            return {"reply_text": reply, "trace": trace, "debug": debug}
         finally:
             CURRENT_CONVERSATION_ID.reset(conversation_token)
             CURRENT_PHONE_NUMBER.reset(phone_token)

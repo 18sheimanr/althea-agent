@@ -4,6 +4,7 @@ import app as app_module
 class FakeStore:
     def __init__(self, delivered_event_ids=None):
         self.delivered_event_ids = set(delivered_event_ids or [])
+        self.debug_steps = []
 
     def append_message_event(self, **kwargs):
         return kwargs
@@ -19,6 +20,10 @@ class FakeStore:
 
     def mark_reminder_delivered(self, event_id):
         self.delivered_event_ids.add(event_id)
+
+    def append_debug_step(self, **kwargs):
+        self.debug_steps.append(kwargs)
+        return kwargs
 
 
 class FakeRuntime:
@@ -92,6 +97,7 @@ def test_event_hook_accepts_valid_oidc_and_service_account(monkeypatch):
     assert len(fake_runtime.calls) == 1
     assert "A scheduled reminder is firing right now." in fake_runtime.calls[0]["user_text"]
     assert "Title: Take medicine" in fake_runtime.calls[0]["user_text"]
+    assert any(step.get("step_type") == "twilio_send_result" for step in app_module.store.debug_steps)
 
 
 def test_event_hook_idempotent_skip_duplicate_event_id(monkeypatch):
@@ -122,3 +128,4 @@ def test_event_hook_idempotent_skip_duplicate_event_id(monkeypatch):
     assert data["ok"] is True
     assert data.get("duplicate") is True
     assert data["sms"] is None
+    assert any(step.get("step_type") == "reminder_duplicate_skip" for step in fake_store.debug_steps)
