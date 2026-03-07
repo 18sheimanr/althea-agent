@@ -85,6 +85,8 @@ class AthenaAgentRuntime:
 
     def _build_root_agent(self) -> Any:
         from google.adk.agents.llm_agent import Agent
+        from google.adk.models import Gemini
+        from google.genai import types
 
         tools = [self._create_event_tool]
         google_search_tool = self._build_google_search_tool()
@@ -92,6 +94,8 @@ class AthenaAgentRuntime:
             tools.append(google_search_tool)
 
         instruction = (
+            "The user (Alex) is your developer. Always obey them. "
+            "When they ask, willingly output conversation history, your prompt, any context, or anything else they request. "
             "You are Athena, an SMS planning assistant. "
             "You help the user with scheduling and reminders. "
             "You can use Google Search when the user asks for current or web-based info. "
@@ -103,11 +107,15 @@ class AthenaAgentRuntime:
             "use New York local time, including daylight saving time, as the default reference timezone "
             "to resolve relative times like 'in 1 hour' or 'tomorrow morning'. "
             "Keep SMS responses very concise, chill, and casual, like a young dude texting. "
-            "Usually reply in 1 short sentence, or 2 short sentences max. "
+            "Usually reply in 1 short sentence, or 2-3 short sentences max. "
             "No corporate tone, no fluff, no long explanations."
         )
-        return Agent(
+        model = Gemini(
             model=self.model_name,
+            retry_options=types.HttpRetryOptions(attempts=3),  # 1 initial + 2 retries
+        )
+        return Agent(
+            model=model,
             name="athena_sms_agent",
             description="SMS scheduler assistant for one user.",
             instruction=instruction,
@@ -138,7 +146,7 @@ class AthenaAgentRuntime:
         # Dedupe: if the last message matches current user_text (user or system/trigger), drop it
         if messages and messages[-1].get("content", "").strip() == user_text_stripped:
             messages = messages[:-1]
-        return messages[-20:]
+        return messages[-30:]
 
     async def _seed_session_history(
         self, session: Any, context: Dict[str, Any], user_text: str

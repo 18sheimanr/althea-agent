@@ -89,7 +89,7 @@ class ConversationStore:
     def load_conversation_context(
         self,
         conversation_id: str,
-        history_limit: int = 12,
+        history_limit: int = 30,
         for_model_seed: bool = True,
     ) -> Dict[str, Any]:
         """Load conversation context. When for_model_seed=True, exclude trigger/audit rows from messages."""

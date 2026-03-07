@@ -18,3 +18,4 @@
 - Important prod gotchas from prior debugging:
   - A reminder can be saved in Firestore with `schedule_status: failed` even if it never made it onto Cloud Tasks.
   - If a reminder is queued but never sends, inspect `/internal/events/agent-hook` request logs; queue success does not mean SMS delivery success.
+  - It is recommended to search .venv folder for source code when debugging or figuring out what features are in Google ADK
