@@ -181,3 +181,353 @@ def test_append_and_load_context_in_order(monkeypatch):
 
     context = store.load_conversation_context("phone_1555", history_limit=10)
     assert [row["content"] for row in context["messages"]] == ["First", "Second"]
+
+
+def test_load_conversation_context_filters_trigger_rows_for_model_seed(monkeypatch):
+    """When for_model_seed=True, exclude source=trigger rows from messages."""
+    store = ConversationStore(FakeDB())
+    sequence = {"value": 0}
+
+    def _fake_next_sequence(conversation_id):
+        sequence["value"] += 1
+        return sequence["value"]
+
+    monkeypatch.setattr(store, "_next_sequence", _fake_next_sequence)
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="user",
+        content="Remind me at 1am",
+        phone_number="+15555550100",
+        source="sms",
+    )
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="assistant",
+        content="Gotcha!",
+        phone_number="+15555550100",
+        source="agent",
+    )
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="system",
+        content="Event trigger received. type=reminder, title=go to bed",
+        phone_number="+15555550100",
+        source="trigger",
+    )
+
+    context = store.load_conversation_context("phone_1555", history_limit=10, for_model_seed=True)
+    contents = [row["content"] for row in context["messages"]]
+    assert "Event trigger received. type=reminder, title=go to bed" not in contents
+    assert contents == ["Remind me at 1am", "Gotcha!"]
+
+
+def test_load_conversation_context_filters_trigger_rows_for_model_seed(monkeypatch):
+    """When for_model_seed=True, exclude source=trigger rows from messages."""
+    store = ConversationStore(FakeDB())
+    sequence = {"value": 0}
+
+    def _fake_next_sequence(conversation_id):
+        sequence["value"] += 1
+        return sequence["value"]
+
+    monkeypatch.setattr(store, "_next_sequence", _fake_next_sequence)
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="user",
+        content="Remind me at 1am",
+        phone_number="+15555550100",
+        source="sms",
+    )
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="system",
+        content="Event trigger received. type=reminder, title=go to bed",
+        phone_number="+15555550100",
+        source="trigger",
+    )
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="assistant",
+        content="Gotcha!",
+        phone_number="+15555550100",
+        source="agent",
+    )
+
+    context = store.load_conversation_context("phone_1555", history_limit=10, for_model_seed=True)
+    contents = [row["content"] for row in context["messages"]]
+    assert "Event trigger received. type=reminder, title=go to bed" not in contents
+    assert "Remind me at 1am" in contents
+    assert "Gotcha!" in contents
+
+
+def test_load_conversation_context_filters_trigger_rows_for_model_seed(monkeypatch):
+    """When for_model_seed=True, exclude source=trigger and metadata.kind reminder rows from messages."""
+    store = ConversationStore(FakeDB())
+    sequence = {"value": 0}
+
+    def _fake_next_sequence(conversation_id):
+        sequence["value"] += 1
+        return sequence["value"]
+
+    monkeypatch.setattr(store, "_next_sequence", _fake_next_sequence)
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="user",
+        content="Remind me at 1am",
+        phone_number="+15555550100",
+        source="sms",
+    )
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="system",
+        content="Event trigger received. type=reminder, title=go to bed",
+        phone_number="+15555550100",
+        source="trigger",
+    )
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="assistant",
+        content="Time to hit the hay!",
+        phone_number="+15555550100",
+        source="agent",
+    )
+
+    context = store.load_conversation_context("phone_1555", history_limit=10, for_model_seed=True)
+    contents = [row["content"] for row in context["messages"]]
+    assert "Event trigger received. type=reminder, title=go to bed" not in contents
+    assert "Remind me at 1am" in contents
+    assert "Time to hit the hay!" in contents
+
+
+def test_load_conversation_context_filters_trigger_rows_for_model_seed(monkeypatch):
+    """When for_model_seed=True, exclude source=trigger and metadata.kind reminder rows from messages."""
+    store = ConversationStore(FakeDB())
+    sequence = {"value": 0}
+
+    def _fake_next_sequence(conversation_id):
+        sequence["value"] += 1
+        return sequence["value"]
+
+    monkeypatch.setattr(store, "_next_sequence", _fake_next_sequence)
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="user",
+        content="Remind me at 1am",
+        phone_number="+15555550100",
+        source="sms",
+    )
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="system",
+        content="Event trigger received. type=reminder, title=go to bed",
+        phone_number="+15555550100",
+        source="trigger",
+    )
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="assistant",
+        content="Gotcha!",
+        phone_number="+15555550100",
+        source="agent",
+    )
+
+    context = store.load_conversation_context("phone_1555", history_limit=10, for_model_seed=True)
+    contents = [row["content"] for row in context["messages"]]
+    assert "Event trigger received. type=reminder, title=go to bed" not in contents
+    assert "Remind me at 1am" in contents
+    assert "Gotcha!" in contents
+
+
+def test_load_conversation_context_filters_trigger_rows_for_model_seed(monkeypatch):
+    """When for_model_seed=True, exclude source=trigger rows from messages."""
+    store = ConversationStore(FakeDB())
+    sequence = {"value": 0}
+
+    def _fake_next_sequence(conversation_id):
+        sequence["value"] += 1
+        return sequence["value"]
+
+    monkeypatch.setattr(store, "_next_sequence", _fake_next_sequence)
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="user",
+        content="Remind me at 1am",
+        phone_number="+15555550100",
+        source="sms",
+    )
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="system",
+        content="Event trigger received. type=reminder, title=go to bed",
+        phone_number="+15555550100",
+        source="trigger",
+    )
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="assistant",
+        content="Time for bed!",
+        phone_number="+15555550100",
+        source="agent",
+    )
+
+    context = store.load_conversation_context("phone_1555", history_limit=10, for_model_seed=True)
+    contents = [row["content"] for row in context["messages"]]
+    assert "Event trigger received. type=reminder, title=go to bed" not in contents
+    assert "Remind me at 1am" in contents
+    assert "Time for bed!" in contents
+
+
+def test_load_conversation_context_filters_trigger_rows_for_model_seed(monkeypatch):
+    """When for_model_seed=True, trigger/synthetic rows are excluded from messages."""
+    store = ConversationStore(FakeDB())
+    sequence = {"value": 0}
+
+    def _fake_next_sequence(conversation_id):
+        sequence["value"] += 1
+        return sequence["value"]
+
+    monkeypatch.setattr(store, "_next_sequence", _fake_next_sequence)
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="user",
+        content="Remind me at 1am",
+        phone_number="+15555550100",
+        source="sms",
+    )
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="assistant",
+        content="Gotcha!",
+        phone_number="+15555550100",
+        source="agent",
+    )
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="system",
+        content="Event trigger received. type=reminder, title=go to bed",
+        phone_number="+15555550100",
+        source="trigger",
+    )
+
+    context = store.load_conversation_context("phone_1555", history_limit=10, for_model_seed=True)
+    contents = [row["content"] for row in context["messages"]]
+    assert "Event trigger received. type=reminder, title=go to bed" not in contents
+    assert "Remind me at 1am" in contents
+    assert "Gotcha!" in contents
+
+
+def test_load_conversation_context_filters_trigger_rows_for_model_seed(monkeypatch):
+    """When for_model_seed=True, exclude source=trigger rows from messages."""
+    store = ConversationStore(FakeDB())
+    sequence = {"value": 0}
+
+    def _fake_next_sequence(conversation_id):
+        sequence["value"] += 1
+        return sequence["value"]
+
+    monkeypatch.setattr(store, "_next_sequence", _fake_next_sequence)
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="user",
+        content="Remind me at 1am",
+        phone_number="+15555550100",
+        source="sms",
+    )
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="system",
+        content="Event trigger received. type=reminder, title=go to bed",
+        phone_number="+15555550100",
+        source="trigger",
+    )
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="assistant",
+        content="Gotcha!",
+        phone_number="+15555550100",
+        source="agent",
+    )
+
+    context = store.load_conversation_context("phone_1555", history_limit=10, for_model_seed=True)
+    contents = [row["content"] for row in context["messages"]]
+    assert "Event trigger received. type=reminder, title=go to bed" not in contents
+    assert "Remind me at 1am" in contents
+    assert "Gotcha!" in contents
+
+
+def test_load_conversation_context_filters_trigger_rows_for_model_seed(monkeypatch):
+    """When for_model_seed=True, exclude source=trigger rows from messages."""
+    store = ConversationStore(FakeDB())
+    sequence = {"value": 0}
+
+    def _fake_next_sequence(conversation_id):
+        sequence["value"] += 1
+        return sequence["value"]
+
+    monkeypatch.setattr(store, "_next_sequence", _fake_next_sequence)
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="user",
+        content="Remind me at 1am",
+        phone_number="+15555550100",
+        source="sms",
+    )
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="assistant",
+        content="Gotcha!",
+        phone_number="+15555550100",
+        source="agent",
+    )
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="system",
+        content="Event trigger received. type=reminder, title=go to bed",
+        phone_number="+15555550100",
+        source="trigger",
+    )
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="assistant",
+        content="Time to go to bed!",
+        phone_number="+15555550100",
+        source="agent",
+    )
+
+    context = store.load_conversation_context("phone_1555", history_limit=10, for_model_seed=True)
+    contents = [row["content"] for row in context["messages"]]
+    assert "Event trigger received. type=reminder, title=go to bed" not in contents
+    assert "Remind me at 1am" in contents
+    assert "Gotcha!" in contents
+    assert "Time to go to bed!" in contents
+
+
+def test_load_conversation_context_filters_trigger_rows_for_model_seed(monkeypatch):
+    """When for_model_seed=True, exclude source=trigger and metadata.kind reminder rows from messages."""
+    store = ConversationStore(FakeDB())
+    sequence = {"value": 0}
+
+    def _fake_next_sequence(conversation_id):
+        sequence["value"] += 1
+        return sequence["value"]
+
+    monkeypatch.setattr(store, "_next_sequence", _fake_next_sequence)
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="user",
+        content="Remind me at 1am",
+        phone_number="+15555550100",
+        source="sms",
+    )
+    store.append_message_event(
+        conversation_id="phone_1555",
+        role="system",
+        content="Event trigger received. type=reminder, title=go to bed",
+        phone_number="+15555550100",
+        source="trigger",
+    )
+
+    context = store.load_conversation_context("phone_1555", history_limit=10, for_model_seed=True)
+    assert len(context["messages"]) == 1
+    assert context["messages"][0]["content"] == "Remind me at 1am"
+    assert context["messages"][0]["source"] == "sms"

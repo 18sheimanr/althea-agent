@@ -1,3 +1,4 @@
+import logging
 import os
 import threading
 from collections import defaultdict
@@ -15,7 +16,7 @@ from agent_runtime import AthenaAgentRuntime
 from conversation_store import ConversationStore, conversation_id_for_phone
 from reminder_scheduler import ReminderTaskScheduler
 
-
+logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 PROJECT_ID = os.getenv("GCP_PROJECT_ID")
@@ -224,12 +225,23 @@ def event_hook() -> Any:
     phone_number = payload.get("phone_number", TWILIO_ALLOWED_FROM)
     _assert_allowed_sender(phone_number)
 
+    event_id = payload.get("event_id", "")
     event_type = payload.get("type", "reminder")
     title = payload.get("title", "Scheduled reminder")
     details = payload.get("details", "")
     due_at = payload.get("due_at", "")
 
     conversation_id = conversation_id_for_phone(phone_number)
+
+    if event_id and _require_store().was_reminder_delivered(event_id):
+        logger.info(
+            "Reminder delivery idempotent skip event_id=%s conversation_id=%s title=%s",
+            event_id,
+            conversation_id,
+            title,
+        )
+        return jsonify({"ok": True, "reply_text": "(already delivered)", "sms": None, "duplicate": True})
+
     trigger_message = (
         f"Event trigger received. type={event_type}, title={title}, due_at={due_at}, details={details}"
     )
@@ -239,15 +251,31 @@ def event_hook() -> Any:
         content=trigger_message,
         phone_number=phone_number,
         source="trigger",
+        metadata={"kind": "reminder_trigger", "event_id": event_id} if event_id else None,
     )
     context = _require_store().load_conversation_context(conversation_id)
-    result = _require_agent_runtime().run_agent_turn(
-        conversation_id=conversation_id,
-        phone_number=phone_number,
-        user_text=trigger_message,
-        context=context,
-    )
+
+    try:
+        result = _require_agent_runtime().run_agent_turn(
+            conversation_id=conversation_id,
+            phone_number=phone_number,
+            user_text=trigger_message,
+            context=context,
+        )
+    except Exception as exc:
+        logger.exception(
+            "Agent turn failed event_id=%s conversation_id=%s type=%s title=%s due_at=%s",
+            event_id,
+            conversation_id,
+            event_type,
+            title,
+            due_at,
+        )
+        raise
+
     assistant_text = result["reply_text"]
+    trace = result.get("trace", [])
+
     _require_store().save_agent_response(
         conversation_id=conversation_id,
         phone_number=phone_number,
@@ -255,7 +283,21 @@ def event_hook() -> Any:
         source="agent",
     )
 
-    send_result = _send_sms_via_twilio(to_number=phone_number, body=assistant_text)
+    try:
+        send_result = _send_sms_via_twilio(to_number=phone_number, body=assistant_text)
+    except Exception as exc:
+        logger.exception(
+            "SMS send failed event_id=%s conversation_id=%s assistant_text=%s trace_len=%d",
+            event_id,
+            conversation_id,
+            assistant_text[:100] if assistant_text else "",
+            len(trace),
+        )
+        raise
+
+    if event_id:
+        _require_store().mark_reminder_delivered(event_id)
+
     return jsonify({"ok": True, "reply_text": assistant_text, "sms": send_result})
 
 

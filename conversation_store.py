@@ -87,19 +87,35 @@ class ConversationStore:
         return payload
 
     def load_conversation_context(
-        self, conversation_id: str, history_limit: int = 12
+        self,
+        conversation_id: str,
+        history_limit: int = 12,
+        for_model_seed: bool = True,
     ) -> Dict[str, Any]:
+        """Load conversation context. When for_model_seed=True, exclude trigger/audit rows from messages."""
         convo_ref = self._conversation_ref(conversation_id)
         convo_snap = convo_ref.get()
         convo_data = convo_snap.to_dict() if convo_snap.exists else {}
 
+        # Fetch extra rows so we have enough after filtering
+        fetch_limit = history_limit * 3 if for_model_seed else history_limit
         query = (
             convo_ref.collection("messages")
             .order_by("seq", direction=firestore.Query.DESCENDING)
-            .limit(history_limit)
+            .limit(fetch_limit)
         )
         rows = [doc.to_dict() for doc in query.stream()]
         rows.reverse()
+
+        if for_model_seed:
+            # Exclude synthetic reminder triggers and optionally reminder-delivery replies
+            rows = [
+                r
+                for r in rows
+                if r.get("source") != "trigger"
+                and r.get("metadata", {}).get("kind") not in ("reminder_trigger", "reminder_delivery_reply")
+            ]
+            rows = rows[-history_limit:]
 
         return {
             "conversation": convo_data,
@@ -131,6 +147,23 @@ class ConversationStore:
         if key_facts is not None:
             updates["key_facts"] = key_facts
         self._conversation_ref(conversation_id).set(updates, merge=True)
+
+    def was_reminder_delivered(self, event_id: str) -> bool:
+        """Return True if this reminder event has already been delivered (idempotency)."""
+        if not event_id:
+            return False
+        doc = self.db.collection(self.events_collection).document(event_id).get()
+        if not doc.exists:
+            return False
+        return doc.to_dict().get("delivery_completed_at") is not None
+
+    def mark_reminder_delivered(self, event_id: str) -> None:
+        """Mark a reminder event as delivered so retries are idempotent."""
+        if not event_id:
+            return
+        self.db.collection(self.events_collection).document(event_id).set(
+            {"delivery_completed_at": utc_now()}, merge=True
+        )
 
     def create_event(
         self,

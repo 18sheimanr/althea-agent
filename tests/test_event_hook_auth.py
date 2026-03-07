@@ -2,6 +2,9 @@ import app as app_module
 
 
 class FakeStore:
+    def __init__(self, delivered_event_ids=None):
+        self.delivered_event_ids = set(delivered_event_ids or [])
+
     def append_message_event(self, **kwargs):
         return kwargs
 
@@ -11,10 +14,16 @@ class FakeStore:
     def save_agent_response(self, **kwargs):
         return kwargs
 
+    def was_reminder_delivered(self, event_id):
+        return event_id in self.delivered_event_ids
+
+    def mark_reminder_delivered(self, event_id):
+        self.delivered_event_ids.add(event_id)
+
 
 class FakeRuntime:
     def run_agent_turn(self, **kwargs):
-        return {"reply_text": "Triggered response"}
+        return {"reply_text": "Triggered response", "trace": [{"event_id": "e1", "part_kinds": ["text"]}]}
 
 
 def _patch_sms_send(monkeypatch):
@@ -75,3 +84,33 @@ def test_event_hook_accepts_valid_oidc_and_service_account(monkeypatch):
     assert response.status_code == 200
     assert response.get_json()["ok"] is True
     assert response.get_json()["sms"]["sid"] == "SM123"
+
+
+def test_event_hook_idempotent_skip_duplicate_event_id(monkeypatch):
+    """Duplicate event_id delivery returns 200 without re-processing."""
+    fake_store = FakeStore(delivered_event_ids=["evt-123"])
+    monkeypatch.setattr(app_module, "store", fake_store)
+    monkeypatch.setattr(app_module, "agent_runtime", FakeRuntime())
+    monkeypatch.setattr(app_module, "TASKS_CALLER_SERVICE_ACCOUNT", "tasks-caller@example.iam.gserviceaccount.com")
+    _patch_sms_send(monkeypatch)
+
+    def _fake_verify(token, req, audience):
+        return {
+            "iss": "https://accounts.google.com",
+            "email": "tasks-caller@example.iam.gserviceaccount.com",
+            "email_verified": True,
+        }
+
+    monkeypatch.setattr(app_module.id_token, "verify_oauth2_token", _fake_verify)
+
+    client = app_module.app.test_client()
+    response = client.post(
+        "/internal/events/agent-hook",
+        json={"event_id": "evt-123", "type": "reminder", "title": "Already sent"},
+        headers={"Authorization": "Bearer fake-token"},
+    )
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["ok"] is True
+    assert data.get("duplicate") is True
+    assert data["sms"] is None

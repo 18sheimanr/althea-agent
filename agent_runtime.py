@@ -4,7 +4,7 @@ import os
 import time
 from contextvars import ContextVar
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from conversation_store import ConversationStore
@@ -12,7 +12,19 @@ from conversation_store import ConversationStore
 CURRENT_CONVERSATION_ID: ContextVar[str] = ContextVar("conversation_id", default="")
 CURRENT_PHONE_NUMBER: ContextVar[str] = ContextVar("phone_number", default="")
 NEW_YORK_TZ = ZoneInfo("America/New_York")
+MAX_TOOL_CYCLES = 5
 logger = logging.getLogger(__name__)
+
+
+def _part_kinds(part: Any) -> str:
+    """Return a string label for the part type (text, function_call, function_response, etc.)."""
+    if getattr(part, "text", None) not in (None, ""):
+        return "text"
+    if getattr(part, "function_call", None) is not None:
+        return "function_call"
+    if getattr(part, "function_response", None) is not None:
+        return "function_response"
+    return "unknown"
 
 
 def new_york_now_iso() -> str:
@@ -120,12 +132,11 @@ class AthenaAgentRuntime:
     def _history_messages_for_seed(
         context: Dict[str, Any], user_text: str
     ) -> List[Dict[str, Any]]:
+        """Return messages for model seeding, excluding the current turn and trigger pollution."""
         messages: List[Dict[str, Any]] = list(context.get("messages", []))
-        if (
-            messages
-            and messages[-1].get("role") == "user"
-            and messages[-1].get("content", "").strip() == user_text.strip()
-        ):
+        user_text_stripped = user_text.strip()
+        # Dedupe: if the last message matches current user_text (user or system/trigger), drop it
+        if messages and messages[-1].get("content", "").strip() == user_text_stripped:
             messages = messages[:-1]
         return messages[-20:]
 
@@ -172,7 +183,9 @@ class AthenaAgentRuntime:
             f"User message: {user_text}"
         )
 
-    async def _run_async(self, conversation_id: str, user_text: str, context: Dict[str, Any]) -> str:
+    async def _run_async(
+        self, conversation_id: str, user_text: str, context: Dict[str, Any]
+    ) -> Tuple[str, List[Dict[str, Any]]]:
         from google.genai import types
 
         self._ensure_runner()
@@ -187,6 +200,9 @@ class AthenaAgentRuntime:
         prompt_user_text = self._prompt_with_runtime_context(user_text)
         new_message = types.Content(role="user", parts=[types.Part(text=prompt_user_text)])
         response_chunks: List[str] = []
+        trace: List[Dict[str, Any]] = []
+        tool_call_count = 0
+
         async for event in self._runner.run_async(
             user_id=conversation_id,
             session_id=session_id,
@@ -194,14 +210,77 @@ class AthenaAgentRuntime:
         ):
             content = getattr(event, "content", None)
             parts = getattr(content, "parts", None) if content is not None else None
+            event_id = getattr(event, "id", None) or ""
+            author = getattr(event, "author", "") or ""
+
             if not parts:
+                trace.append(
+                    {
+                        "event_id": str(event_id),
+                        "author": author,
+                        "part_kinds": [],
+                        "text_preview": None,
+                    }
+                )
+                logger.debug(
+                    "Agent event no_parts conversation_id=%s session_id=%s event_id=%s author=%s",
+                    conversation_id,
+                    session_id,
+                    event_id,
+                    author,
+                )
                 continue
-            chunk = "".join(part.text for part in parts if getattr(part, "text", ""))
-            if chunk:
-                response_chunks.append(chunk)
+
+            part_kinds = [_part_kinds(p) for p in parts]
+            text_chunk = "".join(
+                (getattr(p, "text", "") or "") for p in parts if getattr(p, "text", "")
+            )
+            if text_chunk:
+                response_chunks.append(text_chunk)
+            tool_call_count += sum(1 for k in part_kinds if k == "function_call")
+
+            trace.append(
+                {
+                    "event_id": str(event_id),
+                    "author": author,
+                    "part_kinds": part_kinds,
+                    "text_preview": (text_chunk[:200] + "..." if len(text_chunk) > 200 else text_chunk)
+                    if text_chunk
+                    else None,
+                }
+            )
+            logger.debug(
+                "Agent event conversation_id=%s session_id=%s event_id=%s author=%s part_kinds=%s",
+                conversation_id,
+                session_id,
+                event_id,
+                author,
+                part_kinds,
+            )
+
+            if tool_call_count >= MAX_TOOL_CYCLES and not response_chunks:
+                logger.warning(
+                    "Agent hit tool cycle cap with no text conversation_id=%s session_id=%s tool_call_count=%d trace_len=%d",
+                    conversation_id,
+                    session_id,
+                    tool_call_count,
+                    len(trace),
+                )
+                break
+
         if not response_chunks:
-            return "I could not generate a response right now. Please try again."
-        return response_chunks[-1]
+            logger.warning(
+                "Agent produced no text chunks conversation_id=%s session_id=%s trace_len=%d tool_call_count=%d",
+                conversation_id,
+                session_id,
+                len(trace),
+                tool_call_count,
+            )
+            return (
+                "I could not generate a response right now. Please try again.",
+                trace,
+            )
+        return response_chunks[-1], trace
 
     def run_agent_turn(
         self,
@@ -213,8 +292,8 @@ class AthenaAgentRuntime:
         conversation_token = CURRENT_CONVERSATION_ID.set(conversation_id)
         phone_token = CURRENT_PHONE_NUMBER.set(phone_number)
         try:
-            reply = asyncio.run(self._run_async(conversation_id, user_text, context))
-            return {"reply_text": reply}
+            reply, trace = asyncio.run(self._run_async(conversation_id, user_text, context))
+            return {"reply_text": reply, "trace": trace}
         finally:
             CURRENT_CONVERSATION_ID.reset(conversation_token)
             CURRENT_PHONE_NUMBER.reset(phone_token)

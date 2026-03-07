@@ -18,6 +18,21 @@ def test_history_seed_excludes_duplicate_latest_user_message():
     assert [m["content"] for m in history] == ["hi", "hello"]
 
 
+def test_history_seed_dedupes_system_trigger_matching_user_text():
+    """Defensive dedupe: last message is system/trigger with same content as user_text, should be dropped."""
+    runtime = AthenaAgentRuntime(store=DummyStore())  # type: ignore[arg-type]
+    trigger = "Event trigger received. type=reminder, title=go to bed, due_at=2026-03-07T06:00:00Z, details="
+    context = {
+        "messages": [
+            {"role": "user", "content": "Remind me at 1am"},
+            {"role": "assistant", "content": "Gotcha!"},
+            {"role": "system", "content": trigger, "source": "trigger"},
+        ]
+    }
+    history = runtime._history_messages_for_seed(context=context, user_text=trigger)
+    assert [m["content"] for m in history] == ["Remind me at 1am", "Gotcha!"]
+
+
 def test_prompt_with_runtime_context_includes_current_datetime(monkeypatch):
     monkeypatch.setattr(
         "agent_runtime.new_york_now_iso",

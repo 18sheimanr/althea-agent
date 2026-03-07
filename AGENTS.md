@@ -7,3 +7,14 @@
   - Push trigger deploy: `git push origin main`
   - Watch latest run: `gh run list --limit 1` then `gh run watch <run-id> --exit-status`
   - Check Cloud Run URL: `gcloud run services describe athena-api --region us-central1 --format='value(status.url)'`
+- Prod diagnostics that are easy to forget:
+  - Check ready revision + env on the live service: `gcloud run services describe athena-api --region us-central1 --project your-gcp-project-id --format json`
+  - Tail recent Cloud Run errors: `gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=athena-api AND severity>=ERROR" --project your-gcp-project-id --limit 20 --format json`
+  - Trace reminder delivery requests specifically: `gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=athena-api AND (httpRequest.requestUrl:\"/internal/events/agent-hook\" OR httpRequest.requestUrl:\"/receive-sms\" OR httpRequest.requestUrl:\"/send-sms\")" --project your-gcp-project-id --limit 30 --format json`
+  - Check queue health: `gcloud tasks queues describe athena-reminders --location us-central1 --project your-gcp-project-id --format json`
+  - List queued/retrying reminder tasks: `gcloud tasks list --queue athena-reminders --location us-central1 --project your-gcp-project-id --format json`
+  - Force-run a stuck reminder task now: `gcloud tasks run <full-task-name> --location us-central1 --project your-gcp-project-id`
+  - Check repo vars used by deploy/runtime config: `gh variable list`
+- Important prod gotchas from prior debugging:
+  - A reminder can be saved in Firestore with `schedule_status: failed` even if it never made it onto Cloud Tasks.
+  - If a reminder is queued but never sends, inspect `/internal/events/agent-hook` request logs; queue success does not mean SMS delivery success.
