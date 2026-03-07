@@ -75,10 +75,6 @@
         <label for="limit">Limit</label>
         <input id="limit" type="number" min="10" max="500" value="200" />
         <button id="refreshBtn" type="button">Refresh</button>
-        <label>
-          <input id="autoRefresh" type="checkbox" checked />
-          Auto refresh (5s)
-        </label>
       </div>
       <div id="meta" class="muted" style="margin-top: 0.6rem;"></div>
     </div>
@@ -92,9 +88,9 @@
       const limitEl = document.getElementById("limit");
       const refreshBtn = document.getElementById("refreshBtn");
       const metaEl = document.getElementById("meta");
-      const autoRefreshEl = document.getElementById("autoRefresh");
 
       let latestData = null;
+      const expandedPayloadKeys = new Set();
 
       function fmtDate(raw) {
         if (!raw) return "(no timestamp)";
@@ -114,6 +110,16 @@
         return JSON.stringify(row).toLowerCase();
       }
 
+      function rowKey(item) {
+        const kind = item.kind || "unknown";
+        const data = item.data || {};
+        const id = data.id || "";
+        const ts = item.created_at || data.created_at || "";
+        const requestId = item.request_id || data.request_id || "";
+        const stepType = data.step_type || data.source || data.type || "";
+        return `${kind}|${requestId}|${stepType}|${id}|${ts}`;
+      }
+
       function renderTimeline() {
         if (!latestData) return;
         const flowValue = flowFilterEl.value;
@@ -123,6 +129,8 @@
         const grouped = new Map();
         for (const item of timeline) {
           const requestId = item.request_id || "no_request_id";
+          // Hide legacy message rows created before request_id instrumentation.
+          if (item.kind === "message" && requestId === "no_request_id") continue;
           if (!grouped.has(requestId)) grouped.set(requestId, []);
           grouped.get(requestId).push(item);
         }
@@ -167,6 +175,17 @@
 
             const details = document.createElement("details");
             details.style.marginTop = "0.45rem";
+            const detailsKey = rowKey(item);
+            if (expandedPayloadKeys.has(detailsKey)) {
+              details.open = true;
+            }
+            details.addEventListener("toggle", () => {
+              if (details.open) {
+                expandedPayloadKeys.add(detailsKey);
+              } else {
+                expandedPayloadKeys.delete(detailsKey);
+              }
+            });
             const summary = document.createElement("summary");
             summary.textContent = "View payload";
             details.appendChild(summary);
@@ -197,11 +216,6 @@
       refreshBtn.addEventListener("click", () => loadData().catch((err) => (metaEl.textContent = err.message)));
       flowFilterEl.addEventListener("change", renderTimeline);
       searchTextEl.addEventListener("input", renderTimeline);
-
-      setInterval(() => {
-        if (!autoRefreshEl.checked) return;
-        loadData().catch((err) => (metaEl.textContent = err.message));
-      }, 5000);
 
       loadData().catch((err) => (metaEl.textContent = err.message));
     </script>

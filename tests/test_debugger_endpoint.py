@@ -52,7 +52,14 @@ def test_debugger_page_renders():
     client = app_module.app.test_client()
     response = client.get("/debugger")
     assert response.status_code == 200
-    assert "Conversation Debugger" in response.get_data(as_text=True)
+    html = response.get_data(as_text=True)
+    assert "Conversation Debugger" in html
+    assert "const expandedPayloadKeys = new Set();" in html
+    assert "details.addEventListener(\"toggle\"" in html
+    assert "if (expandedPayloadKeys.has(detailsKey))" in html
+    assert "setInterval(" not in html
+    assert "Auto refresh (5s)" not in html
+    assert "if (item.kind === \"message\" && requestId === \"no_request_id\") continue;" in html
 
 
 def test_debugger_events_payload(monkeypatch):
