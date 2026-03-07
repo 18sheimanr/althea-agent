@@ -34,6 +34,7 @@ def new_york_now_iso() -> str:
 
 class AthenaAgentRuntime:
     _runner_lock = threading.Lock()
+    _loop_lock = threading.Lock()
 
     def __init__(self, store: ConversationStore) -> None:
         self.store = store
@@ -42,6 +43,8 @@ class AthenaAgentRuntime:
         self._root_agent = None
         self._runner = None
         self._session_service = None
+        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop_thread: Optional[threading.Thread] = None
 
     def _create_event_tool(
         self,
@@ -142,6 +145,36 @@ class AthenaAgentRuntime:
                 session_service=self._session_service,
             )
 
+    def _ensure_event_loop_thread(self) -> asyncio.AbstractEventLoop:
+        if self._event_loop is not None and self._loop_thread is not None and self._loop_thread.is_alive():
+            return self._event_loop
+
+        with self._loop_lock:
+            if self._event_loop is not None and self._loop_thread is not None and self._loop_thread.is_alive():
+                return self._event_loop
+
+            loop_ready = threading.Event()
+            loop_holder: Dict[str, asyncio.AbstractEventLoop] = {}
+
+            def _loop_worker() -> None:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop_holder["loop"] = loop
+                loop_ready.set()
+                loop.run_forever()
+
+            thread = threading.Thread(
+                target=_loop_worker,
+                name="athena-agent-runtime-loop",
+                daemon=True,
+            )
+            thread.start()
+            loop_ready.wait()
+
+            self._event_loop = loop_holder["loop"]
+            self._loop_thread = thread
+            return self._event_loop
+
     @staticmethod
     def _history_messages_for_seed(
         context: Dict[str, Any], user_text: str
@@ -202,121 +235,127 @@ class AthenaAgentRuntime:
     ) -> Tuple[str, List[Dict[str, Any]], Dict[str, Any]]:
         from google.genai import types
 
-        self._ensure_runner()
-        session_id = f"{conversation_id}-{int(time.time() * 1000)}"
-        session = await self._session_service.create_session(
-            app_name=self.app_name,
-            user_id=conversation_id,
-            session_id=session_id,
-        )
-        history_for_seed = self._history_messages_for_seed(context=context, user_text=user_text)
-        await self._seed_session_history(session=session, context=context, user_text=user_text)
-
-        history_seed_messages = []
-        for row in history_for_seed:
-            content = row.get("content", "") or ""
-            history_seed_messages.append(
-                {
-                    "role": row.get("role", "user"),
-                    "source": row.get("source", ""),
-                    "content_preview": content[:200] + ("..." if len(content) > 200 else ""),
-                    "metadata_kind": row.get("metadata", {}).get("kind", ""),
-                }
+        conversation_token = CURRENT_CONVERSATION_ID.set(conversation_id)
+        phone_token = CURRENT_PHONE_NUMBER.set(context.get("phone_number", ""))
+        try:
+            self._ensure_runner()
+            session_id = f"{conversation_id}-{int(time.time() * 1000)}"
+            session = await self._session_service.create_session(
+                app_name=self.app_name,
+                user_id=conversation_id,
+                session_id=session_id,
             )
+            history_for_seed = self._history_messages_for_seed(context=context, user_text=user_text)
+            await self._seed_session_history(session=session, context=context, user_text=user_text)
 
-        prompt_user_text = self._prompt_with_runtime_context(user_text)
-        new_message = types.Content(role="user", parts=[types.Part(text=prompt_user_text)])
-        response_chunks: List[str] = []
-        trace: List[Dict[str, Any]] = []
-        tool_call_count = 0
+            history_seed_messages = []
+            for row in history_for_seed:
+                content = row.get("content", "") or ""
+                history_seed_messages.append(
+                    {
+                        "role": row.get("role", "user"),
+                        "source": row.get("source", ""),
+                        "content_preview": content[:200] + ("..." if len(content) > 200 else ""),
+                        "metadata_kind": row.get("metadata", {}).get("kind", ""),
+                    }
+                )
 
-        async for event in self._runner.run_async(
-            user_id=conversation_id,
-            session_id=session_id,
-            new_message=new_message,
-        ):
-            content = getattr(event, "content", None)
-            parts = getattr(content, "parts", None) if content is not None else None
-            event_id = getattr(event, "id", None) or ""
-            author = getattr(event, "author", "") or ""
+            prompt_user_text = self._prompt_with_runtime_context(user_text)
+            new_message = types.Content(role="user", parts=[types.Part(text=prompt_user_text)])
+            response_chunks: List[str] = []
+            trace: List[Dict[str, Any]] = []
+            tool_call_count = 0
 
-            if not parts:
+            async for event in self._runner.run_async(
+                user_id=conversation_id,
+                session_id=session_id,
+                new_message=new_message,
+            ):
+                content = getattr(event, "content", None)
+                parts = getattr(content, "parts", None) if content is not None else None
+                event_id = getattr(event, "id", None) or ""
+                author = getattr(event, "author", "") or ""
+
+                if not parts:
+                    trace.append(
+                        {
+                            "event_id": str(event_id),
+                            "author": author,
+                            "part_kinds": [],
+                            "text_preview": None,
+                        }
+                    )
+                    logger.debug(
+                        "Agent event no_parts conversation_id=%s session_id=%s event_id=%s author=%s",
+                        conversation_id,
+                        session_id,
+                        event_id,
+                        author,
+                    )
+                    continue
+
+                part_kinds = [_part_kinds(p) for p in parts]
+                text_chunk = "".join(
+                    (getattr(p, "text", "") or "") for p in parts if getattr(p, "text", "")
+                )
+                if text_chunk:
+                    response_chunks.append(text_chunk)
+                tool_call_count += sum(1 for k in part_kinds if k == "function_call")
+
                 trace.append(
                     {
                         "event_id": str(event_id),
                         "author": author,
-                        "part_kinds": [],
-                        "text_preview": None,
+                        "part_kinds": part_kinds,
+                        "text_preview": (text_chunk[:200] + "..." if len(text_chunk) > 200 else text_chunk)
+                        if text_chunk
+                        else None,
                     }
                 )
                 logger.debug(
-                    "Agent event no_parts conversation_id=%s session_id=%s event_id=%s author=%s",
+                    "Agent event conversation_id=%s session_id=%s event_id=%s author=%s part_kinds=%s",
                     conversation_id,
                     session_id,
                     event_id,
                     author,
+                    part_kinds,
                 )
-                continue
 
-            part_kinds = [_part_kinds(p) for p in parts]
-            text_chunk = "".join(
-                (getattr(p, "text", "") or "") for p in parts if getattr(p, "text", "")
-            )
-            if text_chunk:
-                response_chunks.append(text_chunk)
-            tool_call_count += sum(1 for k in part_kinds if k == "function_call")
+                if tool_call_count >= MAX_TOOL_CYCLES and not response_chunks:
+                    logger.warning(
+                        "Agent hit tool cycle cap with no text conversation_id=%s session_id=%s tool_call_count=%d trace_len=%d",
+                        conversation_id,
+                        session_id,
+                        tool_call_count,
+                        len(trace),
+                    )
+                    break
 
-            trace.append(
-                {
-                    "event_id": str(event_id),
-                    "author": author,
-                    "part_kinds": part_kinds,
-                    "text_preview": (text_chunk[:200] + "..." if len(text_chunk) > 200 else text_chunk)
-                    if text_chunk
-                    else None,
-                }
-            )
-            logger.debug(
-                "Agent event conversation_id=%s session_id=%s event_id=%s author=%s part_kinds=%s",
-                conversation_id,
-                session_id,
-                event_id,
-                author,
-                part_kinds,
-            )
+            runtime_debug = {
+                "prompt_user_text": prompt_user_text,
+                "history_seed_count": len(history_for_seed),
+                "history_seed_messages": history_seed_messages,
+                "tool_call_count": tool_call_count,
+                "trace_len": len(trace),
+            }
 
-            if tool_call_count >= MAX_TOOL_CYCLES and not response_chunks:
+            if not response_chunks:
                 logger.warning(
-                    "Agent hit tool cycle cap with no text conversation_id=%s session_id=%s tool_call_count=%d trace_len=%d",
+                    "Agent produced no text chunks conversation_id=%s session_id=%s trace_len=%d tool_call_count=%d",
                     conversation_id,
                     session_id,
-                    tool_call_count,
                     len(trace),
+                    tool_call_count,
                 )
-                break
-
-        runtime_debug = {
-            "prompt_user_text": prompt_user_text,
-            "history_seed_count": len(history_for_seed),
-            "history_seed_messages": history_seed_messages,
-            "tool_call_count": tool_call_count,
-            "trace_len": len(trace),
-        }
-
-        if not response_chunks:
-            logger.warning(
-                "Agent produced no text chunks conversation_id=%s session_id=%s trace_len=%d tool_call_count=%d",
-                conversation_id,
-                session_id,
-                len(trace),
-                tool_call_count,
-            )
-            return (
-                "I could not generate a response right now. Please try again.",
-                trace,
-                runtime_debug,
-            )
-        return response_chunks[-1], trace, runtime_debug
+                return (
+                    "I could not generate a response right now. Please try again.",
+                    trace,
+                    runtime_debug,
+                )
+            return response_chunks[-1], trace, runtime_debug
+        finally:
+            CURRENT_CONVERSATION_ID.reset(conversation_token)
+            CURRENT_PHONE_NUMBER.reset(phone_token)
 
     def run_agent_turn(
         self,
@@ -325,11 +364,12 @@ class AthenaAgentRuntime:
         user_text: str,
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
-        conversation_token = CURRENT_CONVERSATION_ID.set(conversation_id)
-        phone_token = CURRENT_PHONE_NUMBER.set(phone_number)
-        try:
-            reply, trace, debug = asyncio.run(self._run_async(conversation_id, user_text, context))
-            return {"reply_text": reply, "trace": trace, "debug": debug}
-        finally:
-            CURRENT_CONVERSATION_ID.reset(conversation_token)
-            CURRENT_PHONE_NUMBER.reset(phone_token)
+        runtime_context = dict(context)
+        runtime_context["phone_number"] = phone_number
+        loop = self._ensure_event_loop_thread()
+        future = asyncio.run_coroutine_threadsafe(
+            self._run_async(conversation_id, user_text, runtime_context),
+            loop,
+        )
+        reply, trace, debug = future.result()
+        return {"reply_text": reply, "trace": trace, "debug": debug}

@@ -150,6 +150,22 @@ def _safe_timestamp(value: Any) -> datetime:
     return datetime.min.replace(tzinfo=timezone.utc)
 
 
+def _message_request_id(row: Dict[str, Any]) -> str:
+    metadata = row.get("metadata")
+    if isinstance(metadata, dict):
+        request_id = metadata.get("request_id")
+        return str(request_id) if request_id is not None else ""
+    return ""
+
+
+def _debugger_reminders(current_store: ConversationStore, limit: int, phone_number: str) -> list[dict]:
+    """Avoid requiring a new Firestore index by filtering phone_number in application code."""
+    fetch_limit = min(500, max(limit * 3, limit))
+    reminders = current_store.list_reminders(limit=fetch_limit)
+    filtered = [row for row in reminders if row.get("phone_number") == phone_number]
+    return filtered[:limit]
+
+
 def _assert_allowed_sender(phone_number: str) -> None:
     if phone_number != TWILIO_ALLOWED_FROM:
         abort(403, description="Sender is not allowed")
@@ -311,7 +327,7 @@ def debugger_events() -> Any:
     debug_steps = []
     if hasattr(current_store, "list_debug_timeline"):
         debug_steps = current_store.list_debug_timeline(conversation_id=conversation_id, limit=limit)
-    reminders = current_store.list_reminders(limit=limit, phone_number=phone_number)
+    reminders = _debugger_reminders(current_store=current_store, limit=limit, phone_number=phone_number)
 
     timeline = []
     for row in messages:
@@ -319,7 +335,7 @@ def debugger_events() -> Any:
             {
                 "kind": "message",
                 "created_at": row.get("created_at"),
-                "request_id": row.get("metadata", {}).get("request_id", ""),
+                "request_id": _message_request_id(row),
                 "data": row,
             }
         )

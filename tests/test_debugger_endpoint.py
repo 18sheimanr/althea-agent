@@ -13,7 +13,7 @@ class FakeStore:
                 "source": "sms",
                 "content": "Hello",
                 "created_at": datetime(2026, 3, 1, 14, 0, tzinfo=timezone.utc),
-                "metadata": {"request_id": "req-1"},
+                "metadata": None,
             }
         ]
 
@@ -29,15 +29,22 @@ class FakeStore:
             }
         ]
 
-    def list_reminders(self, limit=200, phone_number=""):
+    def list_reminders(self, limit=200):
         return [
             {
                 "id": "r1",
                 "type": "reminder",
                 "title": "Hydrate",
-                "phone_number": phone_number,
+                "phone_number": "+15555550100",
                 "created_at": datetime(2026, 3, 1, 13, 59, tzinfo=timezone.utc),
-            }
+            },
+            {
+                "id": "r2",
+                "type": "reminder",
+                "title": "Other user row",
+                "phone_number": "+15550001111",
+                "created_at": datetime(2026, 3, 1, 13, 58, tzinfo=timezone.utc),
+            },
         ]
 
 
@@ -62,5 +69,6 @@ def test_debugger_events_payload(monkeypatch):
     assert payload["messages"][0]["id"] == "m1"
     assert payload["debug_steps"][0]["id"] == "d1"
     assert payload["reminders"][0]["id"] == "r1"
+    assert all(row["phone_number"] == "+15555550100" for row in payload["reminders"])
     assert len(payload["timeline"]) == 3
     assert payload["timeline"][0]["kind"] == "debug_step"
