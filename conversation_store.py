@@ -120,7 +120,6 @@ class ConversationStore:
         return {
             "conversation": convo_data,
             "messages": rows,
-            "rolling_summary": convo_data.get("rolling_summary", ""),
             "key_facts": convo_data.get("key_facts", {}),
         }
 
@@ -192,12 +191,9 @@ class ConversationStore:
     def update_conversation_state(
         self,
         conversation_id: str,
-        rolling_summary: Optional[str] = None,
         key_facts: Optional[Dict[str, Any]] = None,
     ) -> None:
         updates: Dict[str, Any] = {"updated_at": utc_now()}
-        if rolling_summary is not None:
-            updates["rolling_summary"] = rolling_summary
         if key_facts is not None:
             updates["key_facts"] = key_facts
         self._conversation_ref(conversation_id).set(updates, merge=True)

@@ -12,7 +12,7 @@ class FakeStore:
         return kwargs
 
     def load_conversation_context(self, conversation_id, history_limit=12):
-        return {"rolling_summary": "prior context", "messages": []}
+        return {"messages": []}
 
     def save_agent_response(self, **kwargs):
         self.messages.append(kwargs)
@@ -42,9 +42,43 @@ def _set_valid_twilio_validator(monkeypatch, is_valid=True):
     monkeypatch.setattr(app_module, "RequestValidator", _Validator)
 
 
-def test_receive_sms_valid_signature_and_sender(monkeypatch):
+class FakeScheduler:
+    def __init__(self):
+        self.enqueued = []
+
+    def enqueue_immediate_task(self, payload):
+        self.enqueued.append(payload)
+        return "task-123"
+
+
+def test_receive_sms_async_enqueue(monkeypatch):
+    fake_store = FakeStore()
+    fake_scheduler = FakeScheduler()
+    monkeypatch.setattr(app_module, "store", fake_store)
+    monkeypatch.setattr(app_module, "reminder_scheduler", fake_scheduler)
+    monkeypatch.setattr(app_module, "TWILIO_AUTH_TOKEN", "test-token")
+    monkeypatch.setattr(app_module, "TWILIO_ALLOWED_FROM", "+15555550100")
+    _set_valid_twilio_validator(monkeypatch, is_valid=True)
+
+    client = app_module.app.test_client()
+    response = client.post(
+        "/receive-sms",
+        data={"From": "+15555550100", "Body": "Hello async"},
+        headers={"X-Twilio-Signature": "sig"},
+        base_url="https://example.com",
+    )
+
+    assert response.status_code == 200
+    assert "<Response></Response>" in response.get_data(as_text=True)
+    assert len(fake_scheduler.enqueued) == 1
+    assert fake_scheduler.enqueued[0]["body"] == "Hello async"
+    assert fake_scheduler.enqueued[0]["type"] == "incoming_sms"
+
+
+def test_receive_sms_sync_fallback(monkeypatch):
     fake_store = FakeStore()
     monkeypatch.setattr(app_module, "store", fake_store)
+    monkeypatch.setattr(app_module, "reminder_scheduler", None)
     monkeypatch.setattr(app_module, "agent_runtime", FakeRuntime())
     monkeypatch.setattr(app_module, "TWILIO_AUTH_TOKEN", "test-token")
     monkeypatch.setattr(app_module, "TWILIO_ALLOWED_FROM", "+15555550100")
@@ -53,16 +87,14 @@ def test_receive_sms_valid_signature_and_sender(monkeypatch):
     client = app_module.app.test_client()
     response = client.post(
         "/receive-sms",
-        data={"From": "+15555550100", "Body": "Hello"},
+        data={"From": "+15555550100", "Body": "Hello sync"},
         headers={"X-Twilio-Signature": "sig"},
         base_url="https://example.com",
     )
 
     assert response.status_code == 200
     assert "Agent reply" in response.get_data(as_text=True)
-    assert fake_store.updated
-    assert fake_store.debug_steps
-    assert any(step.get("step_type") == "context_loaded" for step in fake_store.debug_steps)
+    assert any(step.get("step_type") == "incoming_sms_sync_fallback" for step in fake_store.debug_steps)
 
 
 def test_receive_sms_invalid_signature(monkeypatch):

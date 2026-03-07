@@ -35,13 +35,13 @@ def test_history_seed_dedupes_system_trigger_matching_user_text():
 
 def test_prompt_with_runtime_context_includes_current_datetime(monkeypatch):
     monkeypatch.setattr(
-        "agent_runtime.new_york_now_iso",
-        lambda: "2026-03-06T15:15:00-05:00",
+        "agent_runtime.format_datetime_simple",
+        lambda dt: "3/6/2026 3:15pm",
     )
 
     prompt = AthenaAgentRuntime._prompt_with_runtime_context("Remind me in 1 hour")
 
-    assert "Current datetime (America/New_York): 2026-03-06T15:15:00-05:00" in prompt
+    assert "Current datetime (America/New_York): 3/6/2026 3:15pm" in prompt
     assert "Use this timestamp as the reference for any relative time requests." in prompt
     assert "User message: Remind me in 1 hour" in prompt
 

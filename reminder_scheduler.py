@@ -27,6 +27,25 @@ class ReminderTaskScheduler:
         self.target_url = target_url
         self.service_account_email = service_account_email
 
+    def enqueue_immediate_task(self, event_payload: Dict[str, Any]) -> str:
+        """Enqueues a task to be processed as soon as possible (no schedule_time)."""
+        import json
+
+        task = {
+            "http_request": {
+                "http_method": tasks_v2.HttpMethod.POST,
+                "url": self.target_url,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps(event_payload).encode("utf-8"),
+                "oidc_token": {
+                    "service_account_email": self.service_account_email,
+                    "audience": self.target_url,
+                },
+            },
+        }
+        created = self.client.create_task(parent=self.parent, task=task)
+        return created.name
+
     def schedule_reminder(self, event_payload: Dict[str, Any]) -> str:
         due_at = event_payload.get("due_at")
         if not due_at:

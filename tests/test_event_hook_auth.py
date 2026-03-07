@@ -10,7 +10,7 @@ class FakeStore:
         return kwargs
 
     def load_conversation_context(self, conversation_id, history_limit=12):
-        return {"rolling_summary": "prior context", "messages": []}
+        return {"messages": []}
 
     def save_agent_response(self, **kwargs):
         return kwargs
@@ -98,6 +98,43 @@ def test_event_hook_accepts_valid_oidc_and_service_account(monkeypatch):
     assert "A scheduled reminder is firing right now." in fake_runtime.calls[0]["user_text"]
     assert "Title: Take medicine" in fake_runtime.calls[0]["user_text"]
     assert any(step.get("step_type") == "twilio_send_result" for step in app_module.store.debug_steps)
+
+
+def test_event_hook_handles_incoming_sms_type(monkeypatch):
+    fake_store = FakeStore()
+    fake_runtime = FakeRuntime()
+    monkeypatch.setattr(app_module, "store", fake_store)
+    monkeypatch.setattr(app_module, "agent_runtime", fake_runtime)
+    monkeypatch.setattr(app_module, "TASKS_CALLER_SERVICE_ACCOUNT", "tasks-caller@example.iam.gserviceaccount.com")
+    _patch_sms_send(monkeypatch)
+
+    def _fake_verify(token, req, audience):
+        return {
+            "iss": "https://accounts.google.com",
+            "email": "tasks-caller@example.iam.gserviceaccount.com",
+            "email_verified": True,
+        }
+
+    monkeypatch.setattr(app_module.id_token, "verify_oauth2_token", _fake_verify)
+
+    client = app_module.app.test_client()
+    response = client.post(
+        "/internal/events/agent-hook",
+        json={
+            "type": "incoming_sms",
+            "phone_number": "+15555550100",
+            "body": "Hello from async task",
+            "request_id": "req-123",
+        },
+        headers={"Authorization": "Bearer fake-token"},
+    )
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["ok"] is True
+    assert "Triggered response" in data["reply_text"]
+    assert len(fake_runtime.calls) == 1
+    assert fake_runtime.calls[0]["user_text"] == "Hello from async task"
+    assert any(step.get("step_type") == "trigger_received" and step.get("flow") == "sms_async" for step in fake_store.debug_steps)
 
 
 def test_event_hook_idempotent_skip_duplicate_event_id(monkeypatch):

@@ -4,7 +4,7 @@ import os
 import threading
 import time
 from contextvars import ContextVar
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -28,8 +28,13 @@ def _part_kinds(part: Any) -> str:
     return "unknown"
 
 
-def new_york_now_iso() -> str:
-    return datetime.now(NEW_YORK_TZ).replace(microsecond=0).isoformat()
+def format_datetime_simple(dt: datetime) -> str:
+    """Format a datetime to a simple string like 3/7/2026 5:30pm."""
+    # Ensure it's in New York time
+    dt_ny = dt.astimezone(NEW_YORK_TZ)
+    # %-I: 1-12, %M: 00-59, %p: AM/PM, %-m: 1-12, %-d: 1-31
+    # On macOS/Linux, %-I, %-m, %-d work.
+    return dt_ny.strftime("%-m/%-d/%Y %-I:%M%p").lower()
 
 
 class AthenaAgentRuntime:
@@ -193,17 +198,6 @@ class AthenaAgentRuntime:
         from google.adk.events import Event
         from google.genai import types
 
-        rolling_summary = context.get("rolling_summary", "").strip()
-        if rolling_summary:
-            summary_event = Event(
-                author="user",
-                content=types.Content(
-                    role="user",
-                    parts=[types.Part(text=f"Conversation summary: {rolling_summary}")],
-                ),
-            )
-            await self._session_service.append_event(session=session, event=summary_event)
-
         history = self._history_messages_for_seed(context=context, user_text=user_text)
         role_to_author = {
             "user": ("user", "user"),
@@ -214,6 +208,13 @@ class AthenaAgentRuntime:
             text = row.get("content", "").strip()
             if not text:
                 continue
+
+            # Prepend timestamp to help agent understand relative timing
+            created_at = row.get("created_at")
+            if isinstance(created_at, datetime):
+                ts_str = format_datetime_simple(created_at)
+                text = f"[{ts_str}] {text}"
+
             role = row.get("role", "user")
             author, content_role = role_to_author.get(role, ("user", "user"))
             event = Event(
@@ -224,8 +225,9 @@ class AthenaAgentRuntime:
 
     @staticmethod
     def _prompt_with_runtime_context(user_text: str) -> str:
+        now_str = format_datetime_simple(datetime.now(NEW_YORK_TZ))
         return (
-            f"Current datetime (America/New_York): {new_york_now_iso()}\n"
+            f"Current datetime (America/New_York): {now_str}\n"
             "Use this timestamp as the reference for any relative time requests.\n"
             f"User message: {user_text}"
         )

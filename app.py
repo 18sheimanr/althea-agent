@@ -373,90 +373,105 @@ def debugger_events() -> Any:
 @app.post("/internal/events/agent-hook")
 def event_hook() -> Any:
     _verify_internal_hook_identity()
-    request_id = str(uuid.uuid4())
 
     payload = request.get_json(silent=True) or {}
+    request_id = payload.get("request_id") or str(uuid.uuid4())
     phone_number = payload.get("phone_number", TWILIO_ALLOWED_FROM)
     _assert_allowed_sender(phone_number)
 
     event_id = payload.get("event_id", "")
     event_type = payload.get("type", "reminder")
-    title = payload.get("title", "Scheduled reminder")
-    details = payload.get("details", "")
-    due_at = payload.get("due_at", "")
+
+    # If it's an incoming SMS task from receive_sms, use the original message body.
+    if event_type == "incoming_sms":
+        user_text = payload.get("body", "").strip() or "(empty message)"
+        flow = "sms_async"
+    else:
+        # Default to reminder flow logic
+        title = payload.get("title", "Scheduled reminder")
+        details = payload.get("details", "")
+        due_at = payload.get("due_at", "")
+        user_text = _build_reminder_prompt(
+            event_type=event_type,
+            title=title,
+            due_at=due_at,
+            details=details,
+        )
+        flow = "reminder_hook"
 
     conversation_id = conversation_id_for_phone(phone_number)
     _append_debug_step(
         conversation_id=conversation_id,
         phone_number=phone_number,
         step_type="trigger_received",
-        flow="reminder_hook",
+        flow=flow,
         request_id=request_id,
         payload={
             "event_id": event_id,
             "event_type": event_type,
-            "title": title,
-            "details": details,
-            "due_at": due_at,
+            "user_text_preview": _shorten(user_text),
             "raw_payload": payload,
         },
         event_id=event_id,
     )
 
+    # Idempotency check (only relevant for reminders with event_id)
     if event_id and _require_store().was_reminder_delivered(event_id):
         logger.info(
-            "Reminder delivery idempotent skip event_id=%s conversation_id=%s title=%s",
+            "Reminder delivery idempotent skip event_id=%s conversation_id=%s",
             event_id,
             conversation_id,
-            title,
         )
         _append_debug_step(
             conversation_id=conversation_id,
             phone_number=phone_number,
             step_type="reminder_duplicate_skip",
-            flow="reminder_hook",
+            flow=flow,
             request_id=request_id,
-            payload={"event_id": event_id, "title": title},
+            payload={"event_id": event_id},
             event_id=event_id,
         )
         return jsonify({"ok": True, "reply_text": "(already delivered)", "sms": None, "duplicate": True})
 
-    trigger_message = (
-        f"Event trigger received. type={event_type}, title={title}, due_at={due_at}, details={details}"
-    )
-    reminder_prompt = _build_reminder_prompt(
-        event_type=event_type,
-        title=title,
-        due_at=due_at,
-        details=details,
-    )
+    # Save user message to history if not already there (incoming_sms is saved in receive_sms)
+    # Actually, for incoming_sms, we want to save it in receive_sms OR here.
+    # If it's async, we might want to save it here to ensure it's in history before running agent.
+    # But wait, receive_sms ALREADY saved it to history in the old sync version.
+    # In the new async receive_sms, I REMOVED the saving to history to keep it simple.
+    # So I should save it here.
+
+    source = "sms" if event_type == "incoming_sms" else "trigger"
+    metadata = {"request_id": request_id}
+    if event_id:
+        metadata["event_id"] = event_id
+    if event_type == "reminder":
+        metadata["kind"] = "reminder_trigger"
+
     _require_store().append_message_event(
         conversation_id=conversation_id,
         role="user",
-        content=trigger_message,
+        content=user_text,
         phone_number=phone_number,
-        source="trigger",
-        metadata=(
-            {"kind": "reminder_trigger", "event_id": event_id, "request_id": request_id}
-            if event_id
-            else {"kind": "reminder_trigger", "request_id": request_id}
-        ),
+        source=source,
+        metadata=metadata,
     )
+
     _append_debug_step(
         conversation_id=conversation_id,
         phone_number=phone_number,
         step_type="trigger_saved",
-        flow="reminder_hook",
+        flow=flow,
         request_id=request_id,
-        payload={"trigger_message": trigger_message},
+        payload={"user_text": user_text},
         event_id=event_id,
     )
+
     context = _require_store().load_conversation_context(conversation_id)
     _append_debug_step(
         conversation_id=conversation_id,
         phone_number=phone_number,
         step_type="context_loaded",
-        flow="reminder_hook",
+        flow=flow,
         request_id=request_id,
         payload={"context": _serialize_value(context)},
         event_id=event_id,
@@ -465,9 +480,9 @@ def event_hook() -> Any:
         conversation_id=conversation_id,
         phone_number=phone_number,
         step_type="llm_call_started",
-        flow="reminder_hook",
+        flow=flow,
         request_id=request_id,
-        payload={"user_text": reminder_prompt},
+        payload={"user_text": user_text},
         event_id=event_id,
     )
 
@@ -475,7 +490,7 @@ def event_hook() -> Any:
         result = _require_agent_runtime().run_agent_turn(
             conversation_id=conversation_id,
             phone_number=phone_number,
-            user_text=reminder_prompt,
+            user_text=user_text,
             context=context,
         )
     except Exception as exc:
@@ -483,19 +498,12 @@ def event_hook() -> Any:
             conversation_id=conversation_id,
             phone_number=phone_number,
             step_type="error",
-            flow="reminder_hook",
+            flow=flow,
             request_id=request_id,
             payload={"stage": "run_agent_turn", "error": str(exc)},
             event_id=event_id,
         )
-        logger.exception(
-            "Agent turn failed event_id=%s conversation_id=%s type=%s title=%s due_at=%s",
-            event_id,
-            conversation_id,
-            event_type,
-            title,
-            due_at,
-        )
+        logger.exception("Agent turn failed in hook flow=%s", flow)
         raise
 
     assistant_text = result["reply_text"]
@@ -505,7 +513,7 @@ def event_hook() -> Any:
         conversation_id=conversation_id,
         phone_number=phone_number,
         step_type="llm_call_finished",
-        flow="reminder_hook",
+        flow=flow,
         request_id=request_id,
         payload={
             "assistant_text": assistant_text,
@@ -519,13 +527,13 @@ def event_hook() -> Any:
         conversation_id=conversation_id,
         phone_number=phone_number,
         content=assistant_text,
-        source="assistant",
+        source="agent",
     )
     _append_debug_step(
         conversation_id=conversation_id,
         phone_number=phone_number,
         step_type="assistant_saved",
-        flow="reminder_hook",
+        flow=flow,
         request_id=request_id,
         payload={"assistant_preview": _shorten(assistant_text)},
         event_id=event_id,
@@ -536,7 +544,7 @@ def event_hook() -> Any:
             conversation_id=conversation_id,
             phone_number=phone_number,
             step_type="twilio_send_attempt",
-            flow="reminder_hook",
+            flow=flow,
             request_id=request_id,
             payload={"to_number": phone_number, "assistant_preview": _shorten(assistant_text)},
             event_id=event_id,
@@ -547,24 +555,19 @@ def event_hook() -> Any:
             conversation_id=conversation_id,
             phone_number=phone_number,
             step_type="error",
-            flow="reminder_hook",
+            flow=flow,
             request_id=request_id,
             payload={"stage": "twilio_send", "error": str(exc)},
             event_id=event_id,
         )
-        logger.exception(
-            "SMS send failed event_id=%s conversation_id=%s assistant_text=%s trace_len=%d",
-            event_id,
-            conversation_id,
-            assistant_text[:100] if assistant_text else "",
-            len(trace),
-        )
+        logger.exception("SMS send failed in hook flow=%s", flow)
         raise
+
     _append_debug_step(
         conversation_id=conversation_id,
         phone_number=phone_number,
         step_type="twilio_send_result",
-        flow="reminder_hook",
+        flow=flow,
         request_id=request_id,
         payload={"send_result": send_result},
         event_id=event_id,
@@ -576,7 +579,7 @@ def event_hook() -> Any:
             conversation_id=conversation_id,
             phone_number=phone_number,
             step_type="reminder_marked_delivered",
-            flow="reminder_hook",
+            flow=flow,
             request_id=request_id,
             payload={"event_id": event_id},
             event_id=event_id,
@@ -616,11 +619,30 @@ def receive_sms() -> Response:
     _assert_allowed_sender(phone_number)
     incoming_text = request.form.get("Body", "").strip() or "(empty message)"
 
+    # Asynchronous approach: Enqueue a task for Cloud Tasks to call /internal/events/agent-hook
+    # This prevents Twilio timeouts (15s) during cold starts or slow LLM calls.
+    if reminder_scheduler is not None:
+        try:
+            reminder_scheduler.enqueue_immediate_task(
+                {
+                    "type": "incoming_sms",
+                    "phone_number": phone_number,
+                    "body": incoming_text,
+                    "request_id": request_id,
+                }
+            )
+            logger.info("Enqueued incoming SMS task for %s", phone_number)
+            # Return empty TwiML; the response will be sent via REST API later.
+            return Response("<Response></Response>", status=200, mimetype="application/xml")
+        except Exception:
+            logger.exception("Failed to enqueue incoming SMS task, falling back to sync processing")
+
+    # Fallback to synchronous processing if scheduler is not available or enqueuing fails
     conversation_id = conversation_id_for_phone(phone_number)
     _append_debug_step(
         conversation_id=conversation_id,
         phone_number=phone_number,
-        step_type="incoming_sms",
+        step_type="incoming_sms_sync_fallback",
         flow="sms",
         request_id=request_id,
         payload={"body": incoming_text},
@@ -683,23 +705,6 @@ def receive_sms() -> Response:
         flow="sms",
         request_id=request_id,
         payload={"assistant_preview": _shorten(assistant_text)},
-    )
-
-    rolling_summary = (
-        f"{context.get('rolling_summary', '')}\n"
-        f"User: {incoming_text}\n"
-        f"Assistant: {assistant_text}"
-    ).strip()[-2000:]
-    _require_store().update_conversation_state(
-        conversation_id=conversation_id, rolling_summary=rolling_summary
-    )
-    _append_debug_step(
-        conversation_id=conversation_id,
-        phone_number=phone_number,
-        step_type="conversation_state_updated",
-        flow="sms",
-        request_id=request_id,
-        payload={"rolling_summary_preview": _shorten(rolling_summary)},
     )
 
     # Twilio reads TwiML from the webhook response and sends it back to the sender.
