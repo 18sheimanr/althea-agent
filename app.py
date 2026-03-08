@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import threading
@@ -375,6 +376,7 @@ def event_hook() -> Any:
     _verify_internal_hook_identity()
 
     payload = request.get_json(silent=True) or {}
+    logger.info("Received event hook: %s", json.dumps(payload))
     request_id = payload.get("request_id") or str(uuid.uuid4())
     phone_number = payload.get("phone_number", TWILIO_ALLOWED_FROM)
     _assert_allowed_sender(phone_number)

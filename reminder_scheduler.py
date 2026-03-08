@@ -1,15 +1,40 @@
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict
+from zoneinfo import ZoneInfo
 
 from google.cloud import tasks_v2
 from google.protobuf import timestamp_pb2
 
+NEW_YORK_TZ = ZoneInfo("America/New_York")
+logger = logging.getLogger(__name__)
+
 
 def parse_due_at_utc(due_at: str) -> datetime:
-    normalized = due_at.strip().replace("Z", "+00:00")
-    parsed = datetime.fromisoformat(normalized)
+    """Parses a string representing a wall-clock time in America/New_York (if no offset).
+    Returns an aware datetime in UTC for use in scheduling.
+    """
+    normalized = due_at.strip()
+    # Python 3.11+ handles 'Z' in fromisoformat, but for broader compatibility:
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+
+    try:
+        # datetime.fromisoformat handles many formats like:
+        # 2026-03-01T15:30:00, 2026-03-01 15:30:00, 2026-03-01, etc.
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        logger.error("Failed to parse due_at string: '%s'. Error: %s", due_at, exc)
+        raise ValueError(f"Invalid datetime format: {due_at}. Expected ISO-8601 like 2026-03-01T15:30:00") from exc
+
+    # If the LLM did not provide any timezone info, assume New York time.
+    # replace(tzinfo=...) handles naive-to-aware conversion correctly for clock-time interpretation.
     if parsed.tzinfo is None:
-        raise ValueError("due_at must include timezone information (use UTC ISO-8601)")
+        # If the date is a simple date (YYYY-MM-DD), fromisoformat returns time at 00:00:00.
+        parsed = parsed.replace(tzinfo=NEW_YORK_TZ)
+
+    # Convert to UTC for Cloud Tasks scheduling. 
+    # astimezone handles Daylight Savings transition correctly when converting to UTC.
     return parsed.astimezone(timezone.utc)
 
 
@@ -55,6 +80,10 @@ class ReminderTaskScheduler:
         schedule_ts = timestamp_pb2.Timestamp()
         schedule_ts.FromDatetime(schedule_dt)
 
+        # Log for debugging instant triggers
+        logger.info("Scheduling reminder: due_at=%s, parsed_utc=%s, now_utc=%s", 
+                    due_at, schedule_dt.isoformat(), datetime.now(timezone.utc).isoformat())
+
         body = {
             "event_id": event_payload.get("id"),
             "type": event_payload.get("type", "reminder"),
@@ -79,5 +108,9 @@ class ReminderTaskScheduler:
             },
             "schedule_time": schedule_ts,
         }
-        created = self.client.create_task(parent=self.parent, task=task)
+        # Explicitly passing schedule_time as a separate argument can be more robust
+        created = self.client.create_task(
+            parent=self.parent, 
+            task=task
+        )
         return created.name

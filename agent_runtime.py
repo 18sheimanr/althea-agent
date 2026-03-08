@@ -29,12 +29,12 @@ def _part_kinds(part: Any) -> str:
 
 
 def format_datetime_simple(dt: datetime) -> str:
-    """Format a datetime to a simple string like 3/7/2026 5:30pm."""
+    """Format a datetime to a simple string like '3/7/2026 5:30pm EST'."""
     # Ensure it's in New York time
     dt_ny = dt.astimezone(NEW_YORK_TZ)
-    # %-I: 1-12, %M: 00-59, %p: AM/PM, %-m: 1-12, %-d: 1-31
+    # %-I: 1-12, %M: 00-59, %p: AM/PM, %-m: 1-12, %-d: 1-31, %Z: EST/EDT
     # On macOS/Linux, %-I, %-m, %-d work.
-    return dt_ny.strftime("%-m/%-d/%Y %-I:%M%p").lower()
+    return dt_ny.strftime("%-m/%-d/%Y %-I:%M%p %Z").strip().lower()
 
 
 class AthenaAgentRuntime:
@@ -112,11 +112,11 @@ class AthenaAgentRuntime:
             "You can use Google Search when the user asks for current or web-based info. "
             "When asked to save a task/event, call create_event_tool. "
             "Event types allowed: full day, partial day, reminder. "
-            "For reminders, always include due_at in ISO-8601 UTC format "
-            "(example: 2026-03-01T15:30:00Z). "
-            "The current datetime will be included in each user turn in America/New_York time; "
-            "use New York local time, including daylight saving time, as the default reference timezone "
-            "to resolve relative times like 'in 1 hour' or 'tomorrow morning'. "
+            "For reminders, always include due_at in ISO-8601 format. "
+            "The user (Alex) lives in New York. All scheduling is assumed to be in America/New_York. "
+            "The current datetime will be provided in each turn in that timezone. "
+            "Always output 'due_at' in New York wall-clock time (e.g., 2026-03-01T15:30:00). "
+            "Do NOT include any timezone offset or 'Z' in your output for 'due_at'. "
             "Keep SMS responses very concise, chill, and casual, for texting. "
             "Usually reply in 1-3 short sentences. "
             "No corporate tone, no fluff, no long explanations."

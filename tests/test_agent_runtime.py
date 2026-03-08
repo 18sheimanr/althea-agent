@@ -1,4 +1,5 @@
-from agent_runtime import AthenaAgentRuntime
+from agent_runtime import AthenaAgentRuntime, format_datetime_simple
+from datetime import datetime, timezone
 
 
 class DummyStore:
@@ -51,3 +52,19 @@ def test_build_google_search_tool_enables_multi_tool_bypass():
 
     assert tool is not None
     assert getattr(tool, "bypass_multi_tools_limit", False) is True
+
+
+def test_format_datetime_simple_est():
+    # March 7, 2026 is EST
+    dt = datetime(2026, 3, 7, 15, 30, tzinfo=timezone.utc)
+    # 15:30 UTC -> 10:30 AM EST
+    formatted = format_datetime_simple(dt)
+    assert "10:30am est" in formatted
+
+
+def test_format_datetime_simple_edt():
+    # July 7, 2026 is EDT
+    dt = datetime(2026, 7, 7, 15, 30, tzinfo=timezone.utc)
+    # 15:30 UTC -> 11:30 AM EDT
+    formatted = format_datetime_simple(dt)
+    assert "11:30am edt" in formatted
