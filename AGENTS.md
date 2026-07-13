@@ -3,10 +3,8 @@
 - You are working on a personal AI assistant hosted on GCP that uses google-adk agentic framework
 - ALWAYS START by looking in the ./docs/ folder. ONLY read docs if they are helpful for the task at hand. But always check.
 - Use the Python 3.11 venv, ADK needs it
-- Infra is simple: Cloud Run + Firestore + GitHub Actions OIDC.
-- Basic deploy commands:
-  - Push trigger deploy: `git push origin main`
-  - Watch latest run: `gh run list --limit 1` then `gh run watch <run-id> --exit-status`
+- Infra is simple: Cloud Run + Firestore (GitHub Actions deploy was removed for the public portfolio repo).
+- Useful ops commands:
   - Check Cloud Run URL: `gcloud run services describe athena-api --region us-central1 --format='value(status.url)'`
 - Prod diagnostics that are easy to forget:
   - Check ready revision + env on the live service: `gcloud run services describe athena-api --region us-central1 --project your-gcp-project-id --format json`
@@ -15,7 +13,6 @@
   - Check queue health: `gcloud tasks queues describe athena-reminders --location us-central1 --project your-gcp-project-id --format json`
   - List queued/retrying reminder tasks: `gcloud tasks list --queue athena-reminders --location us-central1 --project your-gcp-project-id --format json`
   - Force-run a stuck reminder task now: `gcloud tasks run <full-task-name> --location us-central1 --project your-gcp-project-id`
-  - Check repo vars used by deploy/runtime config: `gh variable list`
 - Important prod gotchas from prior debugging:
   - A reminder can be saved in Firestore with `schedule_status: failed` even if it never made it onto Cloud Tasks.
   - If a reminder is queued but never sends, inspect `/internal/events/agent-hook` request logs; queue success does not mean SMS delivery success.

@@ -44,7 +44,6 @@ flowchart TD
 - `agent_runtime.py`: ADK agent setup, tools, role-seeded session history
 - `conversation_store.py`: Firestore persistence for conversations/events/reminders
 - `templates/index.html`: root page + quick test buttons
-- `.github/workflows/deploy-cloud-run.yml`: push-to-main deploy automation
 
 ## API Endpoints
 
@@ -95,59 +94,11 @@ source .venv/bin/activate
 pytest -q
 ```
 
-## Deploy (GitHub Actions)
+## Deploy
 
-Deploy happens automatically on `main` push:
-
-```bash
-git push origin main
-```
-
-Useful watcher commands:
-
-```bash
-gh run list --limit 5
-gh run view <run-id> --json status,conclusion,jobs,url
-gh run watch <run-id> --exit-status
-gh run view <run-id> --log-failed
-```
-
-Manual trigger if needed:
-
-```bash
-gh workflow run "Deploy to Cloud Run"
-```
-
-## Required GitHub Repo Configuration
-
-### Variables (required)
-
-- `GCP_PROJECT_ID`
-- `GCP_REGION`
-- `CLOUD_RUN_SERVICE_NAME`
-- `ARTIFACT_REPO`
-- `IMAGE_NAME`
-
-### Variables (optional; workflow has defaults)
-
-- `CONVERSATIONS_COLLECTION` (default `agent_conversations`)
-- `EVENTS_COLLECTION` (default `agent_events`)
-- `TWILIO_ALLOWED_FROM` (default `+15555550100`)
-- `GEMINI_MODEL` (default `gemini-2.5-flash`)
-- `INTERNAL_HOOK_AUDIENCE` (default current prod hook URL)
-- `TASKS_CALLER_SERVICE_ACCOUNT` (default runtime SA)
-- `TASKS_QUEUE_ID` (default `athena-reminders`)
-- `TASKS_LOCATION` (default `GCP_REGION`)
-- `TWILIO_FROM_NUMBER` (optional, used for outbound SMS)
-- `TWILIO_MESSAGING_SERVICE_SID` (optional alternative for outbound SMS)
-
-### Secrets (required for deploy/runtime)
-
-- `WIF_PROVIDER`
-- `WIF_SERVICE_ACCOUNT`
-- `RUNTIME_SERVICE_ACCOUNT`
-- `TWILIO_AUTH_TOKEN`
-- `TWILIO_ACCOUNT_SID`
+GitHub Actions deploy automation and repo secrets/vars were removed for this public portfolio copy.
+If you redeploy yourself, build/push an image and update Cloud Run with `gcloud` (see `docs/INFRA.md`),
+and keep Twilio/GCP credentials in local `.env` or your own secret store — not in this repo.
 
 No Gemini API key is required in production. Cloud Run uses its runtime service account
 with Vertex AI via Application Default Credentials.

@@ -8,7 +8,7 @@ Application code can evolve freely; this baseline infra should stay mostly uncha
 - **Runtime:** Google Cloud Run (public HTTPS service)
 - **Database:** Cloud Firestore (Native mode, default database)
 - **Container Registry:** Artifact Registry (Docker repo)
-- **CI/CD:** GitHub Actions with GCP Workload Identity Federation (OIDC, no static keys)
+- **CI/CD:** Previously GitHub Actions + GCP Workload Identity Federation; deploy workflow removed for public portfolio
 
 ## Deployed Resources
 
@@ -52,31 +52,7 @@ Application code can evolve freely; this baseline infra should stay mostly uncha
 
 - **Pool:** `github-pool`
 - **Provider:** `github-provider`
-- Trusted GitHub repo: `your-github-username/althea-agent`
-
-## GitHub Actions Deploy Contract
-
-Workflow: `.github/workflows/deploy-cloud-run.yml`
-
-Deploy model:
-
-1. Build Docker image in GitHub Actions runner
-2. Push image to Artifact Registry
-3. Deploy Cloud Run by image reference
-
-Required GitHub repository variables:
-
-- `GCP_PROJECT_ID`
-- `GCP_REGION`
-- `CLOUD_RUN_SERVICE_NAME`
-- `ARTIFACT_REPO`
-- `IMAGE_NAME`
-
-Required GitHub repository secrets:
-
-- `WIF_PROVIDER`
-- `WIF_SERVICE_ACCOUNT`
-- `RUNTIME_SERVICE_ACCOUNT`
+- Trusted GitHub repo: n/a (Actions deploy removed)
 
 ## Cost Posture
 
